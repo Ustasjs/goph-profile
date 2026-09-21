@@ -49,6 +49,20 @@ services:
       mc mb -p local/avatars
       "
 
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+
 volumes:
   pgdata:
   miniodata:
+  rabbitdata:

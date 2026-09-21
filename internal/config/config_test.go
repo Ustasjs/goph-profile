@@ -24,6 +24,7 @@ func required() map[string]string {
 		"S3_ENDPOINT":   "localhost:9000",
 		"S3_ACCESS_KEY": "key",
 		"S3_SECRET_KEY": "secret",
+		"RABBITMQ_URL":  "amqp://guest:guest@localhost:5672/",
 	}
 }
 
@@ -35,6 +36,7 @@ func TestDefaults(t *testing.T) {
 	assert.Equal(t, "avatars", cfg.S3Bucket)
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.False(t, cfg.S3UseSSL)
+	assert.Equal(t, 8, cfg.Prefetch)
 }
 
 func TestEnvOverridesDefaults(t *testing.T) {
@@ -65,7 +67,7 @@ func TestFlagsOverrideEnv(t *testing.T) {
 }
 
 func TestRequiredValues(t *testing.T) {
-	for _, missing := range []string{"DATABASE_DSN", "S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY"} {
+	for _, missing := range []string{"DATABASE_DSN", "S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY", "RABBITMQ_URL"} {
 		t.Run(missing, func(t *testing.T) {
 			env := required()
 			delete(env, missing)
@@ -80,4 +82,15 @@ func TestBadSSLValue(t *testing.T) {
 	env["S3_USE_SSL"] = "nope"
 	_, err := load(t, nil, env)
 	assert.Error(t, err)
+}
+
+func TestBadPrefetch(t *testing.T) {
+	for _, v := range []string{"zero", "0"} {
+		t.Run(v, func(t *testing.T) {
+			env := required()
+			env["WORKER_PREFETCH"] = v
+			_, err := load(t, nil, env)
+			assert.Error(t, err)
+		})
+	}
 }

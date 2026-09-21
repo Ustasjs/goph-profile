@@ -18,6 +18,7 @@ const (
 	defaultRunAddress = ":8080"
 	defaultLogLevel   = "info"
 	defaultS3Bucket   = "avatars"
+	defaultPrefetch   = 8
 )
 
 // Config holds all server settings.
@@ -35,6 +36,10 @@ type Config struct {
 	S3Bucket string
 	// S3UseSSL selects https for the S3 endpoint. Off for local MinIO.
 	S3UseSSL bool
+	// RabbitURL is the AMQP connection string. Required.
+	RabbitURL string
+	// Prefetch caps the unacknowledged deliveries per worker.
+	Prefetch int
 	// LogLevel is a zap level name: debug, info, warn, error.
 	LogLevel string
 }
@@ -51,6 +56,7 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 	cfg := Config{
 		RunAddress: defaultRunAddress,
 		S3Bucket:   defaultS3Bucket,
+		Prefetch:   defaultPrefetch,
 		LogLevel:   defaultLogLevel,
 	}
 
@@ -61,6 +67,7 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 		"S3_ACCESS_KEY": &cfg.S3AccessKey,
 		"S3_SECRET_KEY": &cfg.S3SecretKey,
 		"S3_BUCKET":     &cfg.S3Bucket,
+		"RABBITMQ_URL":  &cfg.RabbitURL,
 		"LOG_LEVEL":     &cfg.LogLevel,
 	}
 	for name, dst := range stringVars {
@@ -75,6 +82,13 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 		}
 		cfg.S3UseSSL = b
 	}
+	if v, ok := lookupEnv("WORKER_PREFETCH"); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse WORKER_PREFETCH: %w", err)
+		}
+		cfg.Prefetch = n
+	}
 
 	fs.StringVar(&cfg.RunAddress, "a", cfg.RunAddress, "HTTP listen address")
 	fs.StringVar(&cfg.DatabaseDSN, "d", cfg.DatabaseDSN, "postgres connection string")
@@ -83,6 +97,8 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 	fs.StringVar(&cfg.S3SecretKey, "s3-secret-key", cfg.S3SecretKey, "S3 secret key")
 	fs.StringVar(&cfg.S3Bucket, "s3-bucket", cfg.S3Bucket, "S3 bucket name")
 	fs.BoolVar(&cfg.S3UseSSL, "s3-ssl", cfg.S3UseSSL, "use https for the S3 endpoint")
+	fs.StringVar(&cfg.RabbitURL, "rabbit-url", cfg.RabbitURL, "AMQP connection string")
+	fs.IntVar(&cfg.Prefetch, "prefetch", cfg.Prefetch, "max unacknowledged deliveries per worker")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
@@ -103,6 +119,12 @@ func (c Config) validate() error {
 	}
 	if c.S3AccessKey == "" || c.S3SecretKey == "" {
 		return errors.New("S3 credentials are required: set S3_ACCESS_KEY and S3_SECRET_KEY")
+	}
+	if c.RabbitURL == "" {
+		return errors.New("rabbit URL is required: set RABBITMQ_URL or -rabbit-url")
+	}
+	if c.Prefetch < 1 {
+		return errors.New("prefetch must be at least 1")
 	}
 	return nil
 }

@@ -123,8 +123,31 @@ func (f *fakeFiles) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
+// fakePub records published events.
+type fakePub struct {
+	uploads []avatar.UploadEvent
+	deletes []avatar.DeleteEvent
+	err     error
+}
+
+func (p *fakePub) PublishUpload(_ context.Context, ev avatar.UploadEvent) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.uploads = append(p.uploads, ev)
+	return nil
+}
+
+func (p *fakePub) PublishDelete(_ context.Context, ev avatar.DeleteEvent) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.deletes = append(p.deletes, ev)
+	return nil
+}
+
 func newService(repo *fakeRepo, files *fakeFiles) *Service {
-	return New(repo, files, zap.NewNop())
+	return New(repo, files, &fakePub{}, zap.NewNop())
 }
 
 // pngBytes renders a real PNG so DecodeConfig has something to read.
@@ -137,7 +160,8 @@ func pngBytes(t *testing.T, w, h int) []byte {
 
 func TestUpload(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
-	svc := newService(repo, files)
+	pub := &fakePub{}
+	svc := New(repo, files, pub, zap.NewNop())
 
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 640, 480))
 	require.NoError(t, err)
@@ -149,6 +173,20 @@ func TestUpload(t *testing.T) {
 	assert.Equal(t, avatar.UploadStatusUploaded, a.UploadStatus)
 	assert.Contains(t, files.objects, a.S3Key)
 	assert.Equal(t, []string{avatar.UploadStatusUploaded}, repo.statuses)
+
+	// The thumbnail job is on its way to the worker.
+	require.Len(t, pub.uploads, 1)
+	assert.Equal(t, avatar.UploadEvent{AvatarID: a.ID, UserID: "u1", S3Key: a.S3Key}, pub.uploads[0])
+}
+
+func TestUploadPublishFailureStillSucceeds(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	pub := &fakePub{err: errors.New("broker is down")}
+	svc := New(repo, files, pub, zap.NewNop())
+
+	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
+	require.NoError(t, err)
+	assert.Equal(t, avatar.UploadStatusUploaded, a.UploadStatus)
 }
 
 func TestUploadNonImage(t *testing.T) {
@@ -223,17 +261,49 @@ func TestThumbnailMissingUntilProcessed(t *testing.T) {
 
 func TestDeleteOwnership(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
-	svc := newService(repo, files)
+	pub := &fakePub{}
+	svc := New(repo, files, pub, zap.NewNop())
 
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
 	require.NoError(t, err)
 
 	err = svc.Delete(context.Background(), a.ID, "intruder")
 	assert.ErrorIs(t, err, avatar.ErrNotOwner)
+	assert.Empty(t, pub.deletes)
 
 	require.NoError(t, svc.Delete(context.Background(), a.ID, "u1"))
 	_, err = svc.GetFile(context.Background(), a.ID)
 	assert.ErrorIs(t, err, avatar.ErrNotFound)
+
+	// The cleanup event carries the original key.
+	require.Len(t, pub.deletes, 1)
+	assert.Equal(t, a.ID, pub.deletes[0].AvatarID)
+	assert.Equal(t, []string{a.S3Key}, pub.deletes[0].S3Keys)
+}
+
+func TestDeleteCollectsThumbnailKeys(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	pub := &fakePub{}
+	svc := New(repo, files, pub, zap.NewNop())
+
+	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
+	require.NoError(t, err)
+
+	// The worker has finished: the record carries thumbnail keys.
+	stored := repo.avatars[a.ID]
+	stored.Thumbnails = map[string]string{
+		"100x100": avatar.ThumbnailKey(a.ID, 100),
+		"300x300": avatar.ThumbnailKey(a.ID, 300),
+	}
+	repo.avatars[a.ID] = stored
+
+	require.NoError(t, svc.Delete(context.Background(), a.ID, "u1"))
+	require.Len(t, pub.deletes, 1)
+	assert.ElementsMatch(t, []string{
+		a.S3Key,
+		avatar.ThumbnailKey(a.ID, 100),
+		avatar.ThumbnailKey(a.ID, 300),
+	}, pub.deletes[0].S3Keys)
 }
 
 func TestDeleteLatest(t *testing.T) {

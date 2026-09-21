@@ -41,16 +41,23 @@ type FileStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+// Publisher emits the async jobs for the worker.
+type Publisher interface {
+	PublishUpload(ctx context.Context, ev avatar.UploadEvent) error
+	PublishDelete(ctx context.Context, ev avatar.DeleteEvent) error
+}
+
 // Service wires the avatar use cases together.
 type Service struct {
 	repo  Repository
 	files FileStore
+	pub   Publisher
 	log   *zap.Logger
 }
 
 // New builds the service.
-func New(repo Repository, files FileStore, log *zap.Logger) *Service {
-	return &Service{repo: repo, files: files, log: log}
+func New(repo Repository, files FileStore, pub Publisher, log *zap.Logger) *Service {
+	return &Service{repo: repo, files: files, pub: pub, log: log}
 }
 
 // File is an opened avatar file ready for streaming.
@@ -101,6 +108,18 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, data []by
 		return avatar.Avatar{}, fmt.Errorf("finish avatar upload: %w", err)
 	}
 	a.UploadStatus = avatar.UploadStatusUploaded
+
+	// A publish failure is not an upload failure: the file and the
+	// record are safe, only the thumbnails will be missing. Answer
+	// 201 and leave a trace for the operator.
+	err = s.pub.PublishUpload(ctx, avatar.UploadEvent{
+		AvatarID: a.ID,
+		UserID:   a.UserID,
+		S3Key:    a.S3Key,
+	})
+	if err != nil {
+		s.log.Error("publish upload event", zap.String("avatar_id", a.ID), zap.Error(err))
+	}
 	return a, nil
 }
 
@@ -151,9 +170,8 @@ func (s *Service) ThumbnailFile(ctx context.Context, id, size string) (File, err
 	return File{Body: body, ContentType: "image/jpeg"}, nil
 }
 
-// Delete soft-deletes one avatar after the ownership check.
-// Removing the S3 objects is the worker's job (iteration 2); until
-// then they stay in the bucket invisible to the API.
+// Delete soft-deletes one avatar after the ownership check. The S3
+// objects are removed asynchronously by the worker.
 func (s *Service) Delete(ctx context.Context, id, requesterID string) error {
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -162,7 +180,7 @@ func (s *Service) Delete(ctx context.Context, id, requesterID string) error {
 	if a.UserID != requesterID {
 		return avatar.ErrNotOwner
 	}
-	return s.repo.SoftDelete(ctx, a.ID)
+	return s.deleteAvatar(ctx, a)
 }
 
 // DeleteLatest soft-deletes the newest avatar of the user. Only the
@@ -175,7 +193,31 @@ func (s *Service) DeleteLatest(ctx context.Context, userID, requesterID string) 
 	if err != nil {
 		return err
 	}
-	return s.repo.SoftDelete(ctx, a.ID)
+	return s.deleteAvatar(ctx, a)
+}
+
+// deleteAvatar hides the record and schedules the S3 cleanup. The
+// keys are captured now: after the soft delete the record is
+// invisible to reads.
+func (s *Service) deleteAvatar(ctx context.Context, a avatar.Avatar) error {
+	keys := make([]string, 0, 1+len(a.Thumbnails))
+	keys = append(keys, a.S3Key)
+	for _, key := range a.Thumbnails {
+		keys = append(keys, key)
+	}
+
+	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
+		return err
+	}
+
+	// Same policy as uploads: the API answer does not depend on the
+	// broker. Unpublished cleanup leaves orphaned objects, which is
+	// acceptable for the MVP.
+	err := s.pub.PublishDelete(ctx, avatar.DeleteEvent{AvatarID: a.ID, S3Keys: keys})
+	if err != nil {
+		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
+	}
+	return nil
 }
 
 func (s *Service) openOriginal(ctx context.Context, a avatar.Avatar) (File, error) {
