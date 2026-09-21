@@ -28,7 +28,9 @@ type fakeService struct {
 	stored    avatar.Avatar
 	getErr    error
 	list      []avatar.Avatar
+	listErr   error
 	deleteErr error
+	panics    bool
 
 	gotUserID   string
 	gotFileName string
@@ -41,11 +43,14 @@ func (f *fakeService) Upload(_ context.Context, userID, fileName string, data []
 }
 
 func (f *fakeService) Metadata(context.Context, string) (avatar.Avatar, error) {
+	if f.panics {
+		panic("metadata blew up")
+	}
 	return f.stored, f.getErr
 }
 
 func (f *fakeService) List(context.Context, string) ([]avatar.Avatar, error) {
-	return f.list, nil
+	return f.list, f.listErr
 }
 
 func (f *fakeService) GetFile(context.Context, string) (service.File, error) {
@@ -83,7 +88,7 @@ func (f *fakeService) DeleteLatest(_ context.Context, _, userID string) error {
 
 func newTestServer(t *testing.T, svc AvatarService, checks ...HealthCheck) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(newRouter(svc, checks, zap.NewNop()))
+	srv := httptest.NewServer(NewRouter(svc, checks, zap.NewNop()))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -340,6 +345,57 @@ func TestHealth(t *testing.T) {
 		assert.Equal(t, "ok", got.Components["db"])
 		assert.Equal(t, "down", got.Components["s3"])
 	})
+}
+
+func TestServiceErrorsMapTo500(t *testing.T) {
+	boom := errors.New("boom")
+	svc := &fakeService{uploadErr: boom, getErr: boom, listErr: boom}
+	srv := newTestServer(t, svc)
+
+	resp := doUpload(t, srv, "/api/v1/avatars", "file", "u1", []byte("data"))
+	assert.Equal(t, http.StatusInternalServerError, resp.status)
+
+	for _, path := range []string{
+		"/api/v1/avatars/id-1",
+		"/api/v1/avatars/id-1/thumbnails/100x100",
+		"/api/v1/avatars/id-1/metadata",
+		"/api/v1/users/u1/avatar",
+		"/api/v1/users/u1/avatars",
+	} {
+		t.Run(path, func(t *testing.T) {
+			resp := doGet(t, srv, path)
+			assert.Equal(t, http.StatusInternalServerError, resp.status)
+		})
+	}
+}
+
+func TestDeleteLatestWithoutHeader(t *testing.T) {
+	srv := newTestServer(t, &fakeService{})
+
+	resp := doDelete(t, srv, "/api/v1/users/u1/avatar", "")
+	assert.Equal(t, http.StatusBadRequest, resp.status)
+}
+
+func TestPanicRecovery(t *testing.T) {
+	srv := newTestServer(t, &fakeService{panics: true})
+
+	// The panic must become a 500, not a dropped connection.
+	resp := doGet(t, srv, "/api/v1/avatars/id-1/metadata")
+	assert.Equal(t, http.StatusInternalServerError, resp.status)
+}
+
+func TestServerShutdown(t *testing.T) {
+	srv := New("127.0.0.1:0", &fakeService{}, nil, zap.NewNop())
+
+	done := make(chan error, 1)
+	go func() { done <- srv.ListenAndServe() }()
+	// Let the listener come up before shutting it down.
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, srv.Shutdown(ctx))
+	assert.ErrorIs(t, <-done, http.ErrServerClosed)
 }
 
 func TestWebPages(t *testing.T) {

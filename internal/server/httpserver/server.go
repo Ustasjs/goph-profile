@@ -27,7 +27,7 @@ func New(addr string, svc AvatarService, checks []HealthCheck, log *zap.Logger) 
 	return &Server{
 		http: &http.Server{
 			Addr:              addr,
-			Handler:           newRouter(svc, checks, log),
+			Handler:           NewRouter(svc, checks, log),
 			ReadHeaderTimeout: readHeaderTimeout,
 		},
 	}
@@ -44,9 +44,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
-// newRouter wires the routes. Split from New so tests can drive the
+// NewRouter wires the routes. Split from New so tests can drive the
 // handlers through httptest without opening a port.
-func newRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Handler {
+func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Handler {
 	h := &handlers{svc: svc, log: log}
 
 	r := chi.NewRouter()

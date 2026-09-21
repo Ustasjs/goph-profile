@@ -306,6 +306,61 @@ func TestDeleteCollectsThumbnailKeys(t *testing.T) {
 	}, pub.deletes[0].S3Keys)
 }
 
+func TestUploadCreateFailure(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	repo.createErr = errors.New("db is down")
+	svc := newService(repo, files)
+
+	_, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
+	assert.Error(t, err)
+}
+
+func TestMetadataAndList(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	svc := newService(repo, files)
+
+	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
+	require.NoError(t, err)
+
+	got, err := svc.Metadata(context.Background(), a.ID)
+	require.NoError(t, err)
+	assert.Equal(t, a.ID, got.ID)
+
+	list, err := svc.List(context.Background(), "u1")
+	require.NoError(t, err)
+	assert.Len(t, list, 1)
+}
+
+func TestLatestFile(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	svc := newService(repo, files)
+
+	_, err := svc.LatestFile(context.Background(), "u1")
+	assert.ErrorIs(t, err, avatar.ErrNotFound)
+
+	_, err = svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
+	require.NoError(t, err)
+
+	f, err := svc.LatestFile(context.Background(), "u1")
+	require.NoError(t, err)
+	require.NoError(t, f.Body.Close())
+	assert.Equal(t, "image/png", f.ContentType)
+}
+
+func TestGetFileObjectGone(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	svc := newService(repo, files)
+
+	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
+	require.NoError(t, err)
+
+	// The record survived but the object vanished: to the client the
+	// avatar is simply missing.
+	delete(files.objects, a.S3Key)
+	_, err = svc.GetFile(context.Background(), a.ID)
+	assert.ErrorIs(t, err, avatar.ErrNotFound)
+}
+
 func TestDeleteLatest(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
 	svc := newService(repo, files)
