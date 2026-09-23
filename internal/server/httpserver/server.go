@@ -4,7 +4,9 @@ package httpserver
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +22,9 @@ const (
 // Server is the HTTP server with graceful shutdown.
 type Server struct {
 	http *http.Server
+
+	mu   sync.Mutex
+	addr net.Addr
 }
 
 // New builds the server with all routes attached.
@@ -35,7 +40,26 @@ func New(addr string, svc AvatarService, checks []HealthCheck, log *zap.Logger) 
 
 // ListenAndServe blocks until Shutdown or a listener error.
 func (s *Server) ListenAndServe() error {
-	return s.http.ListenAndServe()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", s.http.Addr)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.addr = ln.Addr()
+	s.mu.Unlock()
+
+	return s.http.Serve(ln)
+}
+
+// Addr returns the bound listen address, or nil until the listener
+// is up. With a configured ":0" this is the only way to learn the
+// real port, and readiness checks poll it instead of guessing time.
+func (s *Server) Addr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.addr
 }
 
 // Shutdown stops accepting connections and waits for the active

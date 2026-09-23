@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -404,8 +405,17 @@ func TestServerShutdown(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()
-	// Let the listener come up before shutting it down.
-	time.Sleep(50 * time.Millisecond)
+
+	var addr net.Addr
+	require.Eventually(t, func() bool {
+		addr = srv.Addr()
+		return addr != nil
+	}, 5*time.Second, 5*time.Millisecond)
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(context.Background(), "tcp", addr.String())
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
