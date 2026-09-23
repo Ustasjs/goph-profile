@@ -192,6 +192,21 @@ func TestUploadWithoutUser(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.status)
 }
 
+func TestUserIDTooLong(t *testing.T) {
+	srv := newTestServer(t, &fakeService{})
+	longID := strings.Repeat("x", maxUserIDLen+1)
+
+	resp := doUpload(t, srv, "/api/v1/avatars", "file", longID, []byte("data"))
+	assert.Equal(t, http.StatusBadRequest, resp.status)
+
+	resp = doDelete(t, srv, "/api/v1/avatars/id-1", longID)
+	assert.Equal(t, http.StatusBadRequest, resp.status)
+
+	// Exactly at the limit is still fine.
+	resp = doUpload(t, srv, "/api/v1/avatars", "file", strings.Repeat("x", maxUserIDLen), []byte("data"))
+	assert.Equal(t, http.StatusCreated, resp.status)
+}
+
 func TestUploadWithoutFileField(t *testing.T) {
 	srv := newTestServer(t, &fakeService{})
 

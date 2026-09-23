@@ -67,10 +67,19 @@ type File struct {
 	Size        int64
 }
 
+// maxFileNameLen matches the file_name VARCHAR(255) column. The name
+// is display-only metadata, so an oversized one is truncated rather
+// than rejected.
+const maxFileNameLen = 255
+
 // Upload stores the file and its metadata. The record is created
 // first, so a failed S3 write leaves a visible failed row instead
 // of an orphaned object.
 func (s *Service) Upload(ctx context.Context, userID, fileName string, data []byte) (avatar.Avatar, error) {
+	if runes := []rune(fileName); len(runes) > maxFileNameLen {
+		fileName = string(runes[:maxFileNameLen])
+	}
+
 	id := uuid.NewString()
 
 	// Dimensions are best effort: format validation is out of

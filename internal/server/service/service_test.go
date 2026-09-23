@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -187,6 +188,19 @@ func TestUploadPublishFailureStillSucceeds(t *testing.T) {
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
 	require.NoError(t, err)
 	assert.Equal(t, avatar.UploadStatusUploaded, a.UploadStatus)
+}
+
+func TestUploadTruncatesLongFileName(t *testing.T) {
+	repo, files := newFakeRepo(), newFakeFiles()
+	svc := newService(repo, files)
+
+	longName := strings.Repeat("ф", maxFileNameLen+40) + ".png"
+	a, err := svc.Upload(context.Background(), "u1", longName, pngBytes(t, 1, 1))
+	require.NoError(t, err)
+
+	// Truncated to the column limit in characters, not bytes.
+	assert.Equal(t, maxFileNameLen, len([]rune(a.FileName)))
+	assert.Equal(t, strings.Repeat("ф", maxFileNameLen), a.FileName)
 }
 
 func TestUploadNonImage(t *testing.T) {

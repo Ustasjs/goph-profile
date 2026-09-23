@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -20,6 +21,26 @@ import (
 
 // maxUploadBytes limits one avatar file, per the spec.
 const maxUploadBytes = 10 << 20
+
+// maxUserIDLen matches the user_id VARCHAR(255) column: a longer
+// header must read as a bad request, not as a database error.
+const maxUserIDLen = 255
+
+// requireUserID reads the X-User-ID header and answers 400 itself
+// when the header is missing or does not fit the schema.
+func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, "X-User-ID header is required")
+		return "", false
+	}
+	// VARCHAR(n) counts characters, not bytes.
+	if utf8.RuneCountInString(userID) > maxUserIDLen {
+		writeError(w, http.StatusBadRequest, "X-User-ID is too long")
+		return "", false
+	}
+	return userID, true
+}
 
 // AvatarService is what the handlers need from the service layer.
 type AvatarService interface {
@@ -50,9 +71,8 @@ type uploadResponse struct {
 }
 
 func (h *handlers) upload(w http.ResponseWriter, r *http.Request) {
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		writeError(w, http.StatusBadRequest, "X-User-ID header is required")
+	userID, ok := requireUserID(w, r)
+	if !ok {
 		return
 	}
 
@@ -224,9 +244,8 @@ func (h *handlers) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) deleteAvatar(w http.ResponseWriter, r *http.Request) {
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		writeError(w, http.StatusBadRequest, "X-User-ID header is required")
+	userID, ok := requireUserID(w, r)
+	if !ok {
 		return
 	}
 	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "avatarID"), userID); err != nil {
@@ -237,9 +256,8 @@ func (h *handlers) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) deleteLatest(w http.ResponseWriter, r *http.Request) {
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		writeError(w, http.StatusBadRequest, "X-User-ID header is required")
+	userID, ok := requireUserID(w, r)
+	if !ok {
 		return
 	}
 	if err := h.svc.DeleteLatest(r.Context(), chi.URLParam(r, "userID"), userID); err != nil {
