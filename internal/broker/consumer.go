@@ -39,6 +39,13 @@ type Consumer struct {
 // NewConsumer dials the broker, declares the topology and caps the
 // in-flight deliveries at prefetch.
 func NewConsumer(url string, prefetch int, log *zap.Logger) (*Consumer, error) {
+	if url == "" {
+		return nil, errors.New("broker: url is required")
+	}
+	if prefetch < 1 {
+		return nil, errors.New("broker: prefetch must be at least 1")
+	}
+
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)

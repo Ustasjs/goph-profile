@@ -8,7 +8,6 @@
 package config
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"strconv"
@@ -103,28 +102,5 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
 	}
-
-	if err := cfg.validate(); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
-}
-
-func (c Config) validate() error {
-	if c.DatabaseDSN == "" {
-		return errors.New("database DSN is required: set DATABASE_DSN or -d")
-	}
-	if c.S3Endpoint == "" {
-		return errors.New("S3 endpoint is required: set S3_ENDPOINT or -s3-endpoint")
-	}
-	if c.S3AccessKey == "" || c.S3SecretKey == "" {
-		return errors.New("S3 credentials are required: set S3_ACCESS_KEY and S3_SECRET_KEY")
-	}
-	if c.RabbitURL == "" {
-		return errors.New("rabbit URL is required: set RABBITMQ_URL or -rabbit-url")
-	}
-	if c.Prefetch < 1 {
-		return errors.New("prefetch must be at least 1")
-	}
-	return nil
 }

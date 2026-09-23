@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	stdlog "log"
 	"os"
@@ -54,6 +55,10 @@ func main() {
 func run(cfg config.Config, log *zap.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+	
+	if cfg.DatabaseDSN == "" {
+		return errors.New("database DSN is required: set DATABASE_DSN or -d")
+	}
 
 	// Migrations are the server's job; the worker only connects.
 	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN)

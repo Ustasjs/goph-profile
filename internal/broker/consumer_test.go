@@ -36,6 +36,20 @@ func delivery(ack *fakeAck) amqp.Delivery {
 	return amqp.Delivery{Acknowledger: ack, Body: []byte(`{}`)}
 }
 
+func TestNewConsumerRejectsBadArguments(t *testing.T) {
+	// Both checks fire before any dial, so no broker is needed.
+	_, err := NewConsumer("", 1, zap.NewNop())
+	assert.Error(t, err)
+
+	_, err = NewConsumer("amqp://guest:guest@localhost:5672/", 0, zap.NewNop())
+	assert.Error(t, err)
+}
+
+func TestNewPublisherRequiresURL(t *testing.T) {
+	_, err := NewPublisher("")
+	assert.Error(t, err)
+}
+
 func TestProcessAcksOnSuccess(t *testing.T) {
 	c := newUnitConsumer()
 	ack := &fakeAck{}

@@ -37,6 +37,33 @@ func newStore(t *testing.T) *s3.Store {
 	return store
 }
 
+func TestNewRejectsIncompleteConfig(t *testing.T) {
+	full := func() s3.Config {
+		return s3.Config{Endpoint: "localhost:9000", AccessKey: "k", SecretKey: "s", Bucket: "b"}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*s3.Config)
+	}{
+		{"no endpoint", func(c *s3.Config) { c.Endpoint = "" }},
+		{"no access key", func(c *s3.Config) { c.AccessKey = "" }},
+		{"no secret key", func(c *s3.Config) { c.SecretKey = "" }},
+		{"no bucket", func(c *s3.Config) { c.Bucket = "" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := full()
+			tt.mutate(&cfg)
+			_, err := s3.New(cfg)
+			assert.Error(t, err)
+		})
+	}
+
+	_, err := s3.New(full())
+	assert.NoError(t, err)
+}
+
 func TestPutGetDelete(t *testing.T) {
 	store := newStore(t)
 	ctx := context.Background()

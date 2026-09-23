@@ -21,6 +21,10 @@ type Publisher struct {
 
 // NewPublisher dials the broker and declares the topology.
 func NewPublisher(url string) (*Publisher, error) {
+	if url == "" {
+		return nil, errors.New("broker: url is required")
+	}
+
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)

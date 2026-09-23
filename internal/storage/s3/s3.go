@@ -32,6 +32,16 @@ type Store struct {
 // New builds the client. It does not touch the network: call
 // EnsureBucket or Ping to check the connection.
 func New(cfg Config) (*Store, error) {
+	if cfg.Endpoint == "" {
+		return nil, errors.New("s3: endpoint is required")
+	}
+	if cfg.AccessKey == "" || cfg.SecretKey == "" {
+		return nil, errors.New("s3: access key and secret key are required")
+	}
+	if cfg.Bucket == "" {
+		return nil, errors.New("s3: bucket is required")
+	}
+
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
