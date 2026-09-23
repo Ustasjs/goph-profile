@@ -133,6 +133,19 @@ func TestStatusUpdates(t *testing.T) {
 	assert.Equal(t, keys, got.Thumbnails)
 }
 
+func TestStatusRejectsUnknownValue(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+
+	a, err := repo.Create(ctx, newAvatar(uuid.NewString()))
+	require.NoError(t, err)
+
+	// The status columns are postgres enums: a value outside the
+	// dictionary must be rejected by the database itself.
+	assert.Error(t, repo.SetUploadStatus(ctx, a.ID, "exploded"))
+	assert.Error(t, repo.SetProcessingStatus(ctx, a.ID, "exploded"))
+}
+
 func TestStatusUpdateMissing(t *testing.T) {
 	repo := newRepo(t)
 
