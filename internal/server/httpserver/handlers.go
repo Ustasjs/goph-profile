@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 )
 
@@ -56,6 +57,7 @@ type AvatarService interface {
 
 type handlers struct {
 	svc AvatarService
+	m   *metrics.Server
 	log *zap.Logger
 }
 
@@ -71,6 +73,12 @@ type uploadResponse struct {
 }
 
 func (h *handlers) upload(w http.ResponseWriter, r *http.Request) {
+	// Every exit before the service call is a client mistake, so the
+	// rejected outcome is the default and success flips it at the end.
+	status := metrics.StatusRejected
+	start := time.Now()
+	defer func() { h.m.ObserveUpload(status, time.Since(start).Seconds()) }()
+
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -107,10 +115,12 @@ func (h *handlers) upload(w http.ResponseWriter, r *http.Request) {
 
 	a, err := h.svc.Upload(r.Context(), userID, header.Filename, data)
 	if err != nil {
+		status = metrics.StatusError
 		h.serviceError(w, err)
 		return
 	}
 
+	status = metrics.StatusOK
 	writeJSON(w, http.StatusCreated, uploadResponse{
 		ID:        a.ID,
 		UserID:    a.UserID,

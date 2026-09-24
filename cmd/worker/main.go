@@ -15,10 +15,12 @@ import (
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ustasjs/goph-profile/internal/broker"
 	"github.com/ustasjs/goph-profile/internal/config"
 	"github.com/ustasjs/goph-profile/internal/logger"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/storage/postgres"
 	"github.com/ustasjs/goph-profile/internal/storage/s3"
 	"github.com/ustasjs/goph-profile/internal/telemetry"
@@ -108,14 +110,31 @@ func run(cfg config.Config, log *zap.Logger) error {
 		return err
 	}
 
-	proc := processor.New(postgres.New(pool), files, log)
+	m := metrics.NewWorker()
+	m.RegisterPool(pool.Stat)
+	proc := processor.New(postgres.New(pool), files, m, log)
 
-	log.Info("worker started", zap.Int("prefetch", cfg.Prefetch))
+	log.Info("worker started",
+		zap.Int("prefetch", cfg.Prefetch),
+		zap.String("metrics_address", cfg.MetricsAddress))
+
+	g, gCtx := errgroup.WithContext(ctx)
+
 	// Run blocks until the context is canceled; it closes the
 	// connection itself on the way out.
-	return consumer.Run(ctx, broker.Handlers{
-		OnUpload:     proc.HandleUpload,
-		OnDelete:     proc.HandleDelete,
-		OnUploadDead: proc.UploadFailed,
+	g.Go(func() error {
+		return consumer.Run(gCtx, broker.Handlers{
+			OnUpload:     proc.HandleUpload,
+			OnDelete:     proc.HandleDelete,
+			OnUploadDead: proc.UploadFailed,
+		})
 	})
+
+	// The worker has no API; the metrics endpoint is its only
+	// listener, for the Prometheus scrapes.
+	g.Go(func() error {
+		return metrics.Serve(gCtx, cfg.MetricsAddress, m.Handler())
+	})
+
+	return g.Wait()
 }

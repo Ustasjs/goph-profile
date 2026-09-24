@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -37,27 +38,46 @@ type FileStore interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// Observer records processing outcomes; the metrics registry
+// implements it. Each handler call is one attempt, so retries count
+// separately.
+type Observer interface {
+	ObserveProcessed(event, status string, seconds float64)
+}
+
+// Outcome labels, matching the metrics package by value.
+const (
+	statusOK      = "ok"
+	statusError   = "error"
+	statusSkipped = "skipped"
+)
+
 // Processor handles consumed events.
 type Processor struct {
 	repo  Repository
 	files FileStore
+	obs   Observer
 	log   *zap.Logger
 }
 
 // New builds the processor.
-func New(repo Repository, files FileStore, log *zap.Logger) *Processor {
-	return &Processor{repo: repo, files: files, log: log}
+func New(repo Repository, files FileStore, obs Observer, log *zap.Logger) *Processor {
+	return &Processor{repo: repo, files: files, obs: obs, log: log}
 }
 
 // HandleUpload builds and stores the thumbnails for one avatar.
 // Deliveries can repeat, so the work is guarded by the current
 // processing status.
-func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) error {
+func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (err error) {
 	ctx, span := tracer.Start(ctx, "process_upload", trace.WithAttributes(
 		attribute.String("avatar_id", ev.AvatarID),
 		attribute.String("user_id", ev.UserID),
 	))
 	defer span.End()
+
+	status := statusError
+	start := time.Now()
+	defer func() { p.obs.ObserveProcessed("upload", status, time.Since(start).Seconds()) }()
 
 	a, err := p.repo.GetByID(ctx, ev.AvatarID)
 	if errors.Is(err, avatar.ErrNotFound) {
@@ -65,6 +85,7 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 		// flight: nothing to process.
 		p.log.Info("upload event for a missing avatar, skipping",
 			zap.String("avatar_id", ev.AvatarID))
+		status = statusSkipped
 		return nil
 	}
 	if err != nil {
@@ -76,6 +97,7 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 		p.log.Info("avatar already processed, skipping",
 			zap.String("avatar_id", ev.AvatarID),
 			zap.String("status", a.ProcessingStatus))
+		status = statusSkipped
 		return nil
 	}
 
@@ -118,18 +140,23 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 		return err
 	}
 	p.log.Info("thumbnails ready", zap.String("avatar_id", ev.AvatarID))
+	status = statusOK
 	return nil
 }
 
 // HandleDelete removes the S3 objects of a soft-deleted avatar. The
 // store treats missing keys as success, so repeated deliveries are
 // harmless.
-func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) error {
+func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) (err error) {
 	ctx, span := tracer.Start(ctx, "process_delete", trace.WithAttributes(
 		attribute.String("avatar_id", ev.AvatarID),
 		attribute.Int("keys", len(ev.S3Keys)),
 	))
 	defer span.End()
+
+	status := statusError
+	start := time.Now()
+	defer func() { p.obs.ObserveProcessed("delete", status, time.Since(start).Seconds()) }()
 
 	for _, key := range ev.S3Keys {
 		if err := p.files.Delete(ctx, key); err != nil {
@@ -139,11 +166,12 @@ func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) err
 
 	// The record is already soft-deleted and invisible: a missing
 	// row here only means it never existed.
-	err := p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusDeleted)
+	err = p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusDeleted)
 	if err != nil && !errors.Is(err, avatar.ErrNotFound) {
 		return err
 	}
 	p.log.Info("avatar files removed", zap.String("avatar_id", ev.AvatarID))
+	status = statusOK
 	return nil
 }
 

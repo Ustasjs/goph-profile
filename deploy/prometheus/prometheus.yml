@@ -1,0 +1,31 @@
+# Prometheus scrape configuration for the local stand.
+#
+# Each app job lists two targets: the compose service (the app
+# profile) and the host (make run / make run-worker). Whichever is not
+# running simply shows as a down target.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: gophprofile-server
+    static_configs:
+      - targets:
+          - server:8080
+          - host.docker.internal:8080
+
+  - job_name: gophprofile-worker
+    static_configs:
+      - targets:
+          - worker:9091
+          - host.docker.internal:9091
+
+  # The rabbitmq_prometheus plugin: queue depths, message rates.
+  - job_name: rabbitmq
+    static_configs:
+      - targets:
+          - rabbitmq:15692
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

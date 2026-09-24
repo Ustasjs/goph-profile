@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+
+	"github.com/ustasjs/goph-profile/internal/metrics"
 )
 
 const (
@@ -30,11 +32,11 @@ type Server struct {
 }
 
 // New builds the server with all routes attached.
-func New(addr string, svc AvatarService, checks []HealthCheck, log *zap.Logger) *Server {
+func New(addr string, svc AvatarService, checks []HealthCheck, m *metrics.Server, log *zap.Logger) *Server {
 	return &Server{
 		http: &http.Server{
 			Addr:              addr,
-			Handler:           NewRouter(svc, checks, log),
+			Handler:           NewRouter(svc, checks, m, log),
 			ReadHeaderTimeout: readHeaderTimeout,
 		},
 	}
@@ -72,11 +74,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // NewRouter wires the routes. Split from New so tests can drive the
 // handlers through httptest without opening a port.
-func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Handler {
-	h := &handlers{svc: svc, log: log}
+func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *zap.Logger) http.Handler {
+	h := &handlers{svc: svc, m: m, log: log}
 
 	r := chi.NewRouter()
-	r.Use(recovery(log), tracing(), logging(log))
+	r.Use(recovery(log), tracing(), m.Middleware(), logging(log))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/avatars", h.upload)
@@ -90,6 +92,7 @@ func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Ha
 	})
 
 	r.Get("/health", healthHandler(checks))
+	r.Method(http.MethodGet, "/metrics", m.Handler())
 
 	r.Get("/", servePage(pageUpload))
 	r.Get("/web/upload", servePage(pageUpload))

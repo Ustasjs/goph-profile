@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 )
 
@@ -89,7 +90,7 @@ func (f *fakeService) DeleteLatest(_ context.Context, _, userID string) error {
 
 func newTestServer(t *testing.T, svc AvatarService, checks ...HealthCheck) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(NewRouter(svc, checks, zap.NewNop()))
+	srv := httptest.NewServer(NewRouter(svc, checks, metrics.NewServer(), zap.NewNop()))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -401,7 +402,7 @@ func TestPanicRecovery(t *testing.T) {
 }
 
 func TestServerShutdown(t *testing.T) {
-	srv := New("127.0.0.1:0", &fakeService{}, nil, zap.NewNop())
+	srv := New("127.0.0.1:0", &fakeService{}, nil, metrics.NewServer(), zap.NewNop())
 
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()

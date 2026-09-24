@@ -20,6 +20,7 @@ import (
 	"github.com/ustasjs/goph-profile/internal/broker"
 	"github.com/ustasjs/goph-profile/internal/config"
 	"github.com/ustasjs/goph-profile/internal/logger"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/httpserver"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 	"github.com/ustasjs/goph-profile/internal/storage/postgres"
@@ -121,12 +122,17 @@ func run(cfg config.Config, log *zap.Logger) error {
 
 	repo := postgres.New(pool)
 	svc := service.New(repo, files, pub, log)
+
+	m := metrics.NewServer()
+	m.RegisterPool(pool.Stat)
+	m.RegisterStorage(repo.StorageByUser)
+
 	checks := []httpserver.HealthCheck{
 		{Name: "db", Check: pool.Ping},
 		{Name: "s3", Check: files.Ping},
 		{Name: "broker", Check: pub.Ping},
 	}
-	server := httpserver.New(cfg.RunAddress, svc, checks, log)
+	server := httpserver.New(cfg.RunAddress, svc, checks, m, log)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
