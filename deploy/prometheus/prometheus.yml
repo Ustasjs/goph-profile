@@ -25,6 +25,17 @@ scrape_configs:
       - targets:
           - rabbitmq:15692
 
+  # Per-queue depths (avatar.upload, avatar.delete, avatar.dead): the
+  # default endpoint only aggregates, the detailed one keeps the
+  # queue label.
+  - job_name: rabbitmq-detailed
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]
+    static_configs:
+      - targets:
+          - rabbitmq:15692
+
   - job_name: prometheus
     static_configs:
       - targets:

@@ -28,7 +28,7 @@ docker compose --profile app up -d --build
 Для локальной разработки — только инфраструктура, сервер и worker нативно:
 
 ```bash
-docker compose up -d          # postgres, minio, rabbitmq
+docker compose up -d          # postgres, minio, rabbitmq + мониторинг-стек
 cp .env.example .env
 make run                      # сервер
 make run-worker               # worker (в другом терминале)
@@ -68,7 +68,28 @@ make run-worker               # worker (в другом терминале)
 | `S3_USE_SSL` | https к S3 | `false` |
 | `RABBITMQ_URL` | строка подключения AMQP | — (обязательна) |
 | `WORKER_PREFETCH` | лимит неподтверждённых сообщений worker'а | `8` |
-| `LOG_LEVEL` | уровень логов zap | `info` |
+| `LOG_LEVEL` | уровень логов | `info` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP gRPC endpoint для трейсов; пустое значение выключает трейсинг | `localhost:4317` |
+| `METRICS_ADDRESS` | адрес `/metrics` worker'а (сервер отдаёт `/metrics` на `RUN_ADDRESS`) | `:9091` |
+
+## Наблюдаемость
+
+`docker compose up -d` вместе с инфраструктурой поднимает мониторинг-стек:
+
+| Сервис | Адрес | Что там |
+|---|---|---|
+| Jaeger | <http://localhost:16686> | распределённые трейсы |
+| Prometheus | <http://localhost:9090> | метрики и статусы таргетов |
+| Grafana | <http://localhost:3000> | дашборды, Explore по логам; вход анонимный |
+| RabbitMQ management | <http://localhost:15672> | guest/guest |
+
+**Трейсинг** — OpenTelemetry: HTTP-запросы (спан именуется по паттерну роута), запросы pgx, операции S3, publish/consume брокера. Контекст трейса едет в заголовках AMQP-сообщения, поэтому загрузка и её обработка worker'ом — один сквозной трейс. Каждый ответ API несёт заголовок `X-Trace-Id` — по нему трейс ищется в Jaeger. Сэмплируется всё (учебный стенд); в проде это был бы `ParentBased(TraceIDRatioBased)`. `/health` и `/metrics` не трейсятся и не попадают в RED-метрики.
+
+**Метрики** — prometheus/client_golang: RED по HTTP (`http_requests_total`, `http_request_duration_seconds`), бизнес (`avatars_uploads_total{ok|error|rejected}`, `avatars_upload_duration_seconds`, `avatars_storage_bytes`, у worker'а — `avatars_processed_total{event,status}` с подсчётом каждой попытки), инфраструктура (pgxpool, go runtime, очереди RabbitMQ через плагин `rabbitmq_prometheus`). `rejected` — ошибки клиента (нет `X-User-ID`, слишком большой файл), они не считаются отказами сервиса. Лейбл `user_id` у `avatars_storage_bytes` допустим только потому, что пользователей на стенде единицы; при неограниченной аудитории метрику пришлось бы агрегировать.
+
+**Логи** — slog, JSON в stdout. Записи в request-path несут `trace_id`/`span_id` активного спана. Promtail собирает логи контейнеров проекта в Loki; в Grafana Explore клик по `trace_id` открывает трейс в Jaeger (derived field). Логи нативных `make run`-процессов остаются в терминале — доставка логов задача платформы, а не приложения.
+
+**Дашборды** — provisioned в папке GophProfile: Service Overview (RED), Resources (пулы, runtime, очереди), Business KPIs (загрузки по исходам, storage, обработка, глубина DLQ). JSON лежат в `deploy/grafana/dashboards/` и подхватываются на лету.
 
 ## Разработка
 

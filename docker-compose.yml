@@ -125,6 +125,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafanadata:/var/lib/grafana
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
