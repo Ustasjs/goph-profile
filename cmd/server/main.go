@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -23,6 +24,7 @@ import (
 	"github.com/ustasjs/goph-profile/internal/server/service"
 	"github.com/ustasjs/goph-profile/internal/storage/postgres"
 	"github.com/ustasjs/goph-profile/internal/storage/s3"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 	"github.com/ustasjs/goph-profile/migrations"
 )
 
@@ -62,6 +64,20 @@ func run(cfg config.Config, log *zap.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
+	shutdownTracing, err := telemetry.Setup(ctx, "gophprofile-server", cfg.OTLPEndpoint)
+	if err != nil {
+		return err
+	}
+	// The flush gets its own context: by this point ctx is already
+	// canceled by the shutdown signal.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			log.Warn("flush traces", zap.Error(err))
+		}
+	}()
+
 	if cfg.DatabaseDSN == "" {
 		return errors.New("database DSN is required: set DATABASE_DSN or -d")
 	}
@@ -69,7 +85,12 @@ func run(cfg config.Config, log *zap.Logger) error {
 		return err
 	}
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN)
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseDSN)
+	if err != nil {
+		return fmt.Errorf("parse database dsn: %w", err)
+	}
+	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return fmt.Errorf("create pgx pool: %w", err)
 	}

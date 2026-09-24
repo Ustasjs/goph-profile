@@ -16,6 +16,10 @@ import (
 	_ "image/png"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	// Register the WebP decoder too: WebP has no stdlib decoder,
@@ -24,6 +28,11 @@ import (
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 )
+
+// tracer is bound lazily to the global provider. Only the mutating
+// use cases get their own spans: the read paths are already visible
+// through the HTTP, database and S3 spans around them.
+var tracer = otel.Tracer("github.com/ustasjs/goph-profile/internal/server/service")
 
 // Repository is the metadata storage the service needs.
 type Repository interface {
@@ -75,7 +84,14 @@ const maxFileNameLen = 255
 // Upload stores the file and its metadata. The record is created
 // first, so a failed S3 write leaves a visible failed row instead
 // of an orphaned object.
-func (s *Service) Upload(ctx context.Context, userID, fileName string, data []byte) (avatar.Avatar, error) {
+func (s *Service) Upload(ctx context.Context, userID, fileName string, data []byte) (_ avatar.Avatar, err error) {
+	ctx, span := tracer.Start(ctx, "upload_avatar", trace.WithAttributes(
+		attribute.String("user_id", userID),
+		attribute.String("file_name", fileName),
+		attribute.Int("file_size", len(data)),
+	))
+	defer func() { finishSpan(span, err) }()
+
 	if runes := []rune(fileName); len(runes) > maxFileNameLen {
 		fileName = string(runes[:maxFileNameLen])
 	}
@@ -181,7 +197,13 @@ func (s *Service) ThumbnailFile(ctx context.Context, id, size string) (File, err
 
 // Delete soft-deletes one avatar after the ownership check. The S3
 // objects are removed asynchronously by the worker.
-func (s *Service) Delete(ctx context.Context, id, requesterID string) error {
+func (s *Service) Delete(ctx context.Context, id, requesterID string) (err error) {
+	ctx, span := tracer.Start(ctx, "delete_avatar", trace.WithAttributes(
+		attribute.String("avatar_id", id),
+		attribute.String("user_id", requesterID),
+	))
+	defer func() { finishSpan(span, err) }()
+
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -194,7 +216,12 @@ func (s *Service) Delete(ctx context.Context, id, requesterID string) error {
 
 // DeleteLatest soft-deletes the newest avatar of the user. Only the
 // user themselves may do it.
-func (s *Service) DeleteLatest(ctx context.Context, userID, requesterID string) error {
+func (s *Service) DeleteLatest(ctx context.Context, userID, requesterID string) (err error) {
+	ctx, span := tracer.Start(ctx, "delete_latest_avatar", trace.WithAttributes(
+		attribute.String("user_id", userID),
+	))
+	defer func() { finishSpan(span, err) }()
+
 	if userID != requesterID {
 		return avatar.ErrNotOwner
 	}
@@ -227,6 +254,16 @@ func (s *Service) deleteAvatar(ctx context.Context, a avatar.Avatar) error {
 		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
 	}
 	return nil
+}
+
+// finishSpan closes the span, marking it failed only for real
+// failures: not-found and not-owner are expected business answers.
+func finishSpan(span trace.Span, err error) {
+	if err != nil && !errors.Is(err, avatar.ErrNotFound) && !errors.Is(err, avatar.ErrNotOwner) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "operation failed")
+	}
+	span.End()
 }
 
 func (s *Service) openOriginal(ctx context.Context, a avatar.Avatar) (File, error) {

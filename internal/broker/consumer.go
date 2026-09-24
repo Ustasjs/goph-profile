@@ -8,6 +8,10 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -158,6 +162,18 @@ func (c *Consumer) loop(ctx context.Context, msgs <-chan amqp.Delivery,
 func (c *Consumer) process(ctx context.Context, d amqp.Delivery,
 	handle func(context.Context, amqp.Delivery) error,
 	dead func(context.Context, amqp.Delivery)) {
+	// Continue the trace the publisher started: one span covers the
+	// delivery including all retry attempts.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier(d.Headers))
+	ctx, span := tracer.Start(ctx, "consume "+d.RoutingKey,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "rabbitmq"),
+			attribute.String("messaging.destination.name", d.RoutingKey),
+			attribute.String("messaging.message.id", d.MessageId),
+		))
+	defer span.End()
+
 	err := c.withRetry(ctx, d, handle)
 	if err == nil {
 		if ackErr := d.Ack(false); ackErr != nil {
@@ -173,6 +189,8 @@ func (c *Consumer) process(ctx context.Context, d amqp.Delivery,
 		return
 	}
 
+	span.RecordError(err)
+	span.SetStatus(codes.Error, "exhausted retries")
 	c.log.Error("message exhausted retries, moving to dead queue",
 		zap.String("routing_key", d.RoutingKey),
 		zap.String("message_id", d.MessageId),

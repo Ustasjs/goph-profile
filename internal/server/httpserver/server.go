@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -74,7 +76,7 @@ func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Ha
 	h := &handlers{svc: svc, log: log}
 
 	r := chi.NewRouter()
-	r.Use(recovery(log), logging(log))
+	r.Use(recovery(log), tracing(), logging(log))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/avatars", h.upload)
@@ -96,7 +98,34 @@ func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Ha
 	r.Post("/web/upload", h.upload)
 	r.Get("/web/gallery/{userID}", servePage(pageGallery))
 
-	return r
+	// otelhttp opens the server span; health checks and metric
+	// scrapes fire every few seconds and would drown real requests
+	// in the trace UI, so they are not traced.
+	return otelhttp.NewHandler(r, "http.server",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/health" && r.URL.Path != "/metrics"
+		}))
+}
+
+// tracing names the server span after the matched route and exposes
+// the trace id to the client, so any curl response can be looked up
+// in the trace UI directly.
+func tracing() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			span := trace.SpanFromContext(r.Context())
+			if sc := span.SpanContext(); sc.IsValid() {
+				w.Header().Set("X-Trace-Id", sc.TraceID().String())
+			}
+			next.ServeHTTP(w, r)
+			// The route pattern is known only after routing, hence
+			// the rename after the handler instead of a span name at
+			// the start.
+			if pattern := chi.RouteContext(r.Context()).RoutePattern(); pattern != "" {
+				span.SetName(r.Method + " " + pattern)
+			}
+		})
+	}
 }
 
 // logging writes one line per request.

@@ -9,11 +9,19 @@ import (
 	"fmt"
 	"io"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/worker/thumbnail"
 )
+
+// tracer is bound lazily to the global provider. The consumer span
+// wraps the whole delivery; these child spans separate the handler
+// work (and each thumbnail) inside it.
+var tracer = otel.Tracer("github.com/ustasjs/goph-profile/internal/worker/processor")
 
 // Repository is the metadata storage the processor needs.
 type Repository interface {
@@ -45,6 +53,12 @@ func New(repo Repository, files FileStore, log *zap.Logger) *Processor {
 // Deliveries can repeat, so the work is guarded by the current
 // processing status.
 func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) error {
+	ctx, span := tracer.Start(ctx, "process_upload", trace.WithAttributes(
+		attribute.String("avatar_id", ev.AvatarID),
+		attribute.String("user_id", ev.UserID),
+	))
+	defer span.End()
+
 	a, err := p.repo.GetByID(ctx, ev.AvatarID)
 	if errors.Is(err, avatar.ErrNotFound) {
 		// Deleted (or never committed) while the event was in
@@ -81,7 +95,10 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 
 	keys := make(map[string]string, len(avatar.ThumbnailSizes))
 	for _, px := range avatar.ThumbnailSizes {
+		_, thumbSpan := tracer.Start(ctx, "generate_thumbnail",
+			trace.WithAttributes(attribute.Int("size_px", px)))
 		thumb, err := thumbnail.Generate(src, px)
+		thumbSpan.End()
 		if err != nil {
 			// Not an image: retrying cannot help, so the avatar is
 			// marked failed and the message is consumed.
@@ -108,6 +125,12 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 // store treats missing keys as success, so repeated deliveries are
 // harmless.
 func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) error {
+	ctx, span := tracer.Start(ctx, "process_delete", trace.WithAttributes(
+		attribute.String("avatar_id", ev.AvatarID),
+		attribute.Int("keys", len(ev.S3Keys)),
+	))
+	defer span.End()
+
 	for _, key := range ev.S3Keys {
 		if err := p.files.Delete(ctx, key); err != nil {
 			return fmt.Errorf("delete object %s: %w", key, err)
