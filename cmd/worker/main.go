@@ -1,4 +1,5 @@
-// GophProfile server entrypoint.
+// GophProfile worker entrypoint: consumes avatar events and does
+// the heavy lifting (thumbnails, S3 cleanup) off the request path.
 package main
 
 import (
@@ -6,27 +7,20 @@ import (
 	"errors"
 	"fmt"
 	stdlog "log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/ustasjs/goph-profile/internal/broker"
 	"github.com/ustasjs/goph-profile/internal/config"
 	"github.com/ustasjs/goph-profile/internal/logger"
-	"github.com/ustasjs/goph-profile/internal/server/httpserver"
-	"github.com/ustasjs/goph-profile/internal/server/service"
 	"github.com/ustasjs/goph-profile/internal/storage/postgres"
 	"github.com/ustasjs/goph-profile/internal/storage/s3"
-	"github.com/ustasjs/goph-profile/migrations"
+	"github.com/ustasjs/goph-profile/internal/worker/processor"
 )
-
-const shutdownTimeout = 10 * time.Second
 
 // Build information injected at link time via
 // -ldflags "-X main.buildVersion=... -X main.buildDate=...".
@@ -51,7 +45,7 @@ func main() {
 	}
 
 	if err := run(cfg, log); err != nil {
-		log.Error("server terminated with error", zap.Error(err))
+		log.Error("worker terminated with error", zap.Error(err))
 		_ = log.Sync()
 		os.Exit(1)
 	}
@@ -65,10 +59,8 @@ func run(cfg config.Config, log *zap.Logger) error {
 	if cfg.DatabaseDSN == "" {
 		return errors.New("database DSN is required: set DATABASE_DSN or -d")
 	}
-	if err := migrations.Run(cfg.DatabaseDSN); err != nil {
-		return err
-	}
 
+	// Migrations are the server's job; the worker only connects.
 	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("create pgx pool: %w", err)
@@ -88,45 +80,20 @@ func run(cfg config.Config, log *zap.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := files.EnsureBucket(ctx); err != nil {
-		return err
-	}
 
-	pub, err := broker.NewPublisher(cfg.RabbitURL)
+	consumer, err := broker.NewConsumer(cfg.RabbitURL, cfg.Prefetch, log)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = pub.Close() }()
 
-	repo := postgres.New(pool)
-	svc := service.New(repo, files, pub, log)
-	checks := []httpserver.HealthCheck{
-		{Name: "db", Check: pool.Ping},
-		{Name: "s3", Check: files.Ping},
-		{Name: "broker", Check: pub.Ping},
-	}
-	server := httpserver.New(cfg.RunAddress, svc, checks, log)
+	proc := processor.New(postgres.New(pool), files, log)
 
-	g, gCtx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		log.Info("starting HTTP server", zap.String("address", cfg.RunAddress))
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
+	log.Info("worker started", zap.Int("prefetch", cfg.Prefetch))
+	// Run blocks until the context is canceled; it closes the
+	// connection itself on the way out.
+	return consumer.Run(ctx, broker.Handlers{
+		OnUpload:     proc.HandleUpload,
+		OnDelete:     proc.HandleDelete,
+		OnUploadDead: proc.UploadFailed,
 	})
-
-	// Wait for a shutdown signal (or a server failure), then stop
-	// the server gracefully.
-	g.Go(func() error {
-		<-gCtx.Done()
-		log.Info("shutting down")
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	})
-
-	return g.Wait()
 }
