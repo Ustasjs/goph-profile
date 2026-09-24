@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	stdlog "log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ustasjs/goph-profile/internal/broker"
@@ -54,14 +54,12 @@ func main() {
 	}
 
 	if err := run(cfg, log); err != nil {
-		log.Error("server terminated with error", zap.Error(err))
-		_ = log.Sync()
+		log.Error("server terminated with error", "error", err)
 		os.Exit(1)
 	}
-	_ = log.Sync()
 }
 
-func run(cfg config.Config, log *zap.Logger) error {
+func run(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
@@ -75,7 +73,7 @@ func run(cfg config.Config, log *zap.Logger) error {
 		flushCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := shutdownTracing(flushCtx); err != nil {
-			log.Warn("flush traces", zap.Error(err))
+			log.Warn("flush traces", "error", err)
 		}
 	}()
 
@@ -137,7 +135,7 @@ func run(cfg config.Config, log *zap.Logger) error {
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		log.Info("starting HTTP server", zap.String("address", cfg.RunAddress))
+		log.Info("starting HTTP server", "address", cfg.RunAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}

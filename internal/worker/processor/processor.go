@@ -8,12 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/worker/thumbnail"
@@ -57,11 +57,11 @@ type Processor struct {
 	repo  Repository
 	files FileStore
 	obs   Observer
-	log   *zap.Logger
+	log   *slog.Logger
 }
 
 // New builds the processor.
-func New(repo Repository, files FileStore, obs Observer, log *zap.Logger) *Processor {
+func New(repo Repository, files FileStore, obs Observer, log *slog.Logger) *Processor {
 	return &Processor{repo: repo, files: files, obs: obs, log: log}
 }
 
@@ -83,8 +83,8 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (er
 	if errors.Is(err, avatar.ErrNotFound) {
 		// Deleted (or never committed) while the event was in
 		// flight: nothing to process.
-		p.log.Info("upload event for a missing avatar, skipping",
-			zap.String("avatar_id", ev.AvatarID))
+		p.log.InfoContext(ctx, "upload event for a missing avatar, skipping",
+			"avatar_id", ev.AvatarID)
 		status = statusSkipped
 		return nil
 	}
@@ -94,9 +94,9 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (er
 	if a.ProcessingStatus == avatar.ProcessingStatusCompleted ||
 		a.ProcessingStatus == avatar.ProcessingStatusDeleted {
 		// A repeated delivery: the work is already done.
-		p.log.Info("avatar already processed, skipping",
-			zap.String("avatar_id", ev.AvatarID),
-			zap.String("status", a.ProcessingStatus))
+		p.log.InfoContext(ctx, "avatar already processed, skipping",
+			"avatar_id", ev.AvatarID,
+			"status", a.ProcessingStatus)
 		status = statusSkipped
 		return nil
 	}
@@ -124,8 +124,8 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (er
 		if err != nil {
 			// Not an image: retrying cannot help, so the avatar is
 			// marked failed and the message is consumed.
-			p.log.Warn("original does not decode, marking failed",
-				zap.String("avatar_id", ev.AvatarID), zap.Error(err))
+			p.log.WarnContext(ctx, "original does not decode, marking failed",
+				"avatar_id", ev.AvatarID, "error", err)
 			return p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusFailed)
 		}
 
@@ -139,7 +139,7 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (er
 	if err := p.repo.SetThumbnails(ctx, ev.AvatarID, keys); err != nil {
 		return err
 	}
-	p.log.Info("thumbnails ready", zap.String("avatar_id", ev.AvatarID))
+	p.log.InfoContext(ctx, "thumbnails ready", "avatar_id", ev.AvatarID)
 	status = statusOK
 	return nil
 }
@@ -170,7 +170,7 @@ func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) (er
 	if err != nil && !errors.Is(err, avatar.ErrNotFound) {
 		return err
 	}
-	p.log.Info("avatar files removed", zap.String("avatar_id", ev.AvatarID))
+	p.log.InfoContext(ctx, "avatar files removed", "avatar_id", ev.AvatarID)
 	status = statusOK
 	return nil
 }
@@ -179,7 +179,7 @@ func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) (er
 // stuck "processing" is distinguishable from a broken one.
 func (p *Processor) UploadFailed(ctx context.Context, ev avatar.UploadEvent) {
 	if err := p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusFailed); err != nil {
-		p.log.Error("mark processing failed",
-			zap.String("avatar_id", ev.AvatarID), zap.Error(err))
+		p.log.ErrorContext(ctx, "mark processing failed",
+			"avatar_id", ev.AvatarID, "error", err)
 	}
 }

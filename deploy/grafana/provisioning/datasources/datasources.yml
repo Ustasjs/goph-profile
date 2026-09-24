@@ -1,0 +1,32 @@
+# Datasources of the local stand. The uids are fixed so the derived
+# field below and the provisioned dashboards can reference them.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # One click from a JSON log line to its trace in Jaeger. The
+      # $$ escapes Grafana's env-var interpolation in provisioning
+      # files; the datasource receives ${__value.raw}.
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id":"(\w+)"'
+          datasourceUid: jaeger
+          url: "$${__value.raw}"

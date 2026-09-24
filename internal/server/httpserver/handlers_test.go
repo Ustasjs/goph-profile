@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/metrics"
@@ -90,7 +90,7 @@ func (f *fakeService) DeleteLatest(_ context.Context, _, userID string) error {
 
 func newTestServer(t *testing.T, svc AvatarService, checks ...HealthCheck) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(NewRouter(svc, checks, metrics.NewServer(), zap.NewNop()))
+	srv := httptest.NewServer(NewRouter(svc, checks, metrics.NewServer(), slog.New(slog.DiscardHandler)))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -402,7 +402,7 @@ func TestPanicRecovery(t *testing.T) {
 }
 
 func TestServerShutdown(t *testing.T) {
-	srv := New("127.0.0.1:0", &fakeService{}, nil, metrics.NewServer(), zap.NewNop())
+	srv := New("127.0.0.1:0", &fakeService{}, nil, metrics.NewServer(), slog.New(slog.DiscardHandler))
 
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()

@@ -18,6 +18,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/broker"
@@ -60,7 +60,7 @@ func startSystem(t *testing.T) *system {
 		t.Skip("DATABASE_DSN, S3_ENDPOINT or RABBITMQ_URL is not set")
 	}
 
-	log := zap.NewNop()
+	log := slog.New(slog.DiscardHandler)
 	require.NoError(t, migrations.Run(dsn))
 
 	pool, err := pgxpool.New(context.Background(), dsn)

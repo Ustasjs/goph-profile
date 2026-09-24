@@ -7,11 +7,11 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/metrics"
@@ -123,7 +123,7 @@ func TestHandleUpload(t *testing.T) {
 	repo := newFakeRepo(a)
 	files := newFakeFiles()
 	files.objects[a.S3Key] = pngBytes(t, 640, 480)
-	p := New(repo, files, metrics.NewWorker(), zap.NewNop())
+	p := New(repo, files, metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.UploadEvent{AvatarID: a.ID, UserID: a.UserID, S3Key: a.S3Key}
 	require.NoError(t, p.HandleUpload(context.Background(), ev))
@@ -144,7 +144,7 @@ func TestHandleUploadIdempotent(t *testing.T) {
 	a.ProcessingStatus = avatar.ProcessingStatusCompleted
 	repo := newFakeRepo(a)
 	files := newFakeFiles() // empty: any S3 access would fail the test
-	p := New(repo, files, metrics.NewWorker(), zap.NewNop())
+	p := New(repo, files, metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.UploadEvent{AvatarID: a.ID, S3Key: a.S3Key}
 	require.NoError(t, p.HandleUpload(context.Background(), ev))
@@ -152,7 +152,7 @@ func TestHandleUploadIdempotent(t *testing.T) {
 }
 
 func TestHandleUploadMissingAvatar(t *testing.T) {
-	p := New(newFakeRepo(), newFakeFiles(), metrics.NewWorker(), zap.NewNop())
+	p := New(newFakeRepo(), newFakeFiles(), metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.UploadEvent{AvatarID: "gone", S3Key: "k"}
 	assert.NoError(t, p.HandleUpload(context.Background(), ev))
@@ -161,7 +161,7 @@ func TestHandleUploadMissingAvatar(t *testing.T) {
 func TestHandleUploadMissingObjectIsRetryable(t *testing.T) {
 	a := pendingAvatar("a1")
 	repo := newFakeRepo(a)
-	p := New(repo, newFakeFiles(), metrics.NewWorker(), zap.NewNop())
+	p := New(repo, newFakeFiles(), metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.UploadEvent{AvatarID: a.ID, S3Key: a.S3Key}
 	// The object may simply not be visible yet: the error must
@@ -174,7 +174,7 @@ func TestHandleUploadNonImageMarksFailed(t *testing.T) {
 	repo := newFakeRepo(a)
 	files := newFakeFiles()
 	files.objects[a.S3Key] = []byte("not an image at all")
-	p := New(repo, files, metrics.NewWorker(), zap.NewNop())
+	p := New(repo, files, metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.UploadEvent{AvatarID: a.ID, S3Key: a.S3Key}
 	// No error: retrying a broken file cannot help.
@@ -189,7 +189,7 @@ func TestHandleDelete(t *testing.T) {
 	files.objects[a.S3Key] = []byte("data")
 	thumbKey := avatar.ThumbnailKey(a.ID, 100)
 	files.objects[thumbKey] = []byte("thumb")
-	p := New(repo, files, metrics.NewWorker(), zap.NewNop())
+	p := New(repo, files, metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.DeleteEvent{AvatarID: a.ID, S3Keys: []string{a.S3Key, thumbKey}}
 	require.NoError(t, p.HandleDelete(context.Background(), ev))
@@ -199,7 +199,7 @@ func TestHandleDelete(t *testing.T) {
 }
 
 func TestHandleDeleteMissingRowTolerated(t *testing.T) {
-	p := New(newFakeRepo(), newFakeFiles(), metrics.NewWorker(), zap.NewNop())
+	p := New(newFakeRepo(), newFakeFiles(), metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.DeleteEvent{AvatarID: "gone", S3Keys: []string{"k1"}}
 	assert.NoError(t, p.HandleDelete(context.Background(), ev))
@@ -208,7 +208,7 @@ func TestHandleDeleteMissingRowTolerated(t *testing.T) {
 func TestHandleDeleteS3FailureIsRetryable(t *testing.T) {
 	files := newFakeFiles()
 	files.deleteErr = errors.New("s3 is down")
-	p := New(newFakeRepo(), files, metrics.NewWorker(), zap.NewNop())
+	p := New(newFakeRepo(), files, metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	ev := avatar.DeleteEvent{AvatarID: "a1", S3Keys: []string{"k1"}}
 	assert.Error(t, p.HandleDelete(context.Background(), ev))
@@ -217,7 +217,7 @@ func TestHandleDeleteS3FailureIsRetryable(t *testing.T) {
 func TestUploadFailed(t *testing.T) {
 	a := pendingAvatar("a1")
 	repo := newFakeRepo(a)
-	p := New(repo, newFakeFiles(), metrics.NewWorker(), zap.NewNop())
+	p := New(repo, newFakeFiles(), metrics.NewWorker(), slog.New(slog.DiscardHandler))
 
 	p.UploadFailed(context.Background(), avatar.UploadEvent{AvatarID: a.ID})
 	assert.Equal(t, []string{avatar.ProcessingStatusFailed}, repo.statuses)

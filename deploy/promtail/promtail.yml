@@ -1,0 +1,36 @@
+# Promtail tails the docker containers of this compose project and
+# pushes their logs to Loki. Locally run binaries (make run) log to
+# the terminal only: shipping is the platform's job, not the app's.
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Only this project's containers; the label comes from compose.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        regex: goph-profile
+        action: keep
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_name"]
+        regex: /(.*)
+        target_label: container
+    pipeline_stages:
+      # App logs are JSON; a non-JSON line (infra containers) passes
+      # through unparsed. Level becomes a label for filtering, the
+      # trace_id stays in the line for the Grafana derived field.
+      - json:
+          expressions:
+            level: level
+      - labels:
+          level:

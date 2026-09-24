@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"log/slog"
 	"net/http"
 
 	// Register decoders for dimension probing.
@@ -20,7 +21,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 
 	// Register the WebP decoder too: WebP has no stdlib decoder,
 	// and x/image supports decode only, which is all the probe needs.
@@ -61,11 +61,11 @@ type Service struct {
 	repo  Repository
 	files FileStore
 	pub   Publisher
-	log   *zap.Logger
+	log   *slog.Logger
 }
 
 // New builds the service.
-func New(repo Repository, files FileStore, pub Publisher, log *zap.Logger) *Service {
+func New(repo Repository, files FileStore, pub Publisher, log *slog.Logger) *Service {
 	return &Service{repo: repo, files: files, pub: pub, log: log}
 }
 
@@ -124,7 +124,7 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, data []by
 		// Best-effort compensation: mark the row failed so the
 		// stuck upload is visible; the original error matters more.
 		if markErr := s.repo.SetUploadStatus(ctx, a.ID, avatar.UploadStatusFailed); markErr != nil {
-			s.log.Error("mark upload failed", zap.String("avatar_id", a.ID), zap.Error(markErr))
+			s.log.ErrorContext(ctx, "mark upload failed", "avatar_id", a.ID, "error", markErr)
 		}
 		return avatar.Avatar{}, fmt.Errorf("store avatar file: %w", err)
 	}
@@ -143,7 +143,7 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, data []by
 		S3Key:    a.S3Key,
 	})
 	if err != nil {
-		s.log.Error("publish upload event", zap.String("avatar_id", a.ID), zap.Error(err))
+		s.log.ErrorContext(ctx, "publish upload event", "avatar_id", a.ID, "error", err)
 	}
 	return a, nil
 }
@@ -251,7 +251,7 @@ func (s *Service) deleteAvatar(ctx context.Context, a avatar.Avatar) error {
 	// acceptable for the MVP.
 	err := s.pub.PublishDelete(ctx, avatar.DeleteEvent{AvatarID: a.ID, S3Keys: keys})
 	if err != nil {
-		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
+		s.log.ErrorContext(ctx, "publish delete event", "avatar_id", a.ID, "error", err)
 	}
 	return nil
 }

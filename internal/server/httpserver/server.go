@@ -4,6 +4,7 @@ package httpserver
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/metrics"
 )
@@ -32,7 +32,7 @@ type Server struct {
 }
 
 // New builds the server with all routes attached.
-func New(addr string, svc AvatarService, checks []HealthCheck, m *metrics.Server, log *zap.Logger) *Server {
+func New(addr string, svc AvatarService, checks []HealthCheck, m *metrics.Server, log *slog.Logger) *Server {
 	return &Server{
 		http: &http.Server{
 			Addr:              addr,
@@ -74,7 +74,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // NewRouter wires the routes. Split from New so tests can drive the
 // handlers through httptest without opening a port.
-func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *zap.Logger) http.Handler {
+func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *slog.Logger) http.Handler {
 	h := &handlers{svc: svc, m: m, log: log}
 
 	r := chi.NewRouter()
@@ -132,29 +132,29 @@ func tracing() func(http.Handler) http.Handler {
 }
 
 // logging writes one line per request.
-func logging(log *zap.Logger) func(http.Handler) http.Handler {
+func logging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
-			log.Info("request",
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.Int("status", sw.status),
-				zap.Duration("duration", time.Since(start)))
+			log.InfoContext(r.Context(), "request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", sw.status,
+				"duration", time.Since(start))
 		})
 	}
 }
 
 // recovery turns a handler panic into a 500 instead of killing the
 // connection.
-func recovery(log *zap.Logger) func(http.Handler) http.Handler {
+func recovery(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					log.Error("handler panic", zap.Any("panic", rec), zap.String("path", r.URL.Path))
+					log.ErrorContext(r.Context(), "handler panic", "panic", rec, "path", r.URL.Path)
 					writeError(w, http.StatusInternalServerError, "internal error")
 				}
 			}()

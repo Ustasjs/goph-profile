@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	stdlog "log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ustasjs/goph-profile/internal/broker"
@@ -50,14 +50,12 @@ func main() {
 	}
 
 	if err := run(cfg, log); err != nil {
-		log.Error("worker terminated with error", zap.Error(err))
-		_ = log.Sync()
+		log.Error("worker terminated with error", "error", err)
 		os.Exit(1)
 	}
-	_ = log.Sync()
 }
 
-func run(cfg config.Config, log *zap.Logger) error {
+func run(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
@@ -71,7 +69,7 @@ func run(cfg config.Config, log *zap.Logger) error {
 		flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := shutdownTracing(flushCtx); err != nil {
-			log.Warn("flush traces", zap.Error(err))
+			log.Warn("flush traces", "error", err)
 		}
 	}()
 
@@ -115,8 +113,8 @@ func run(cfg config.Config, log *zap.Logger) error {
 	proc := processor.New(postgres.New(pool), files, m, log)
 
 	log.Info("worker started",
-		zap.Int("prefetch", cfg.Prefetch),
-		zap.String("metrics_address", cfg.MetricsAddress))
+		"prefetch", cfg.Prefetch,
+		"metrics_address", cfg.MetricsAddress)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
