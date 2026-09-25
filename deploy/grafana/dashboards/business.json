@@ -33,7 +33,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (status) (rate(avatars_uploads_total[1m]))",
+          "expr": "max by (status) (sum by (status, instance) (rate(avatars_uploads_total[1m])))",
           "legendFormat": "{{status}}",
           "refId": "A"
         }
@@ -142,7 +142,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (event, status) (rate(avatars_processed_total[1m]))",
+          "expr": "max by (event, status) (sum by (event, status, instance) (rate(avatars_processed_total[1m])))",
           "legendFormat": "{{event}} / {{status}}",
           "refId": "A"
         }

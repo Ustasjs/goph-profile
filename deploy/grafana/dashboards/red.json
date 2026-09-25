@@ -33,7 +33,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (route) (rate(http_requests_total[1m]))",
+          "expr": "max by (route) (sum by (route, instance) (rate(http_requests_total[1m])))",
           "legendFormat": "{{route}}",
           "refId": "A"
         }
@@ -69,7 +69,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (status) (rate(http_requests_total[1m]))",
+          "expr": "max by (status) (sum by (status, instance) (rate(http_requests_total[1m])))",
           "legendFormat": "{{status}}",
           "refId": "A"
         }
