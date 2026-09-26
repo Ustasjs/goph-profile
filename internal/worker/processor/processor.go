@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/worker/thumbnail"
 )
 
@@ -45,11 +46,10 @@ type Observer interface {
 	ObserveProcessed(event, status string, seconds float64)
 }
 
-// Outcome labels, matching the metrics package by value.
 const (
-	statusOK      = "ok"
-	statusError   = "error"
-	statusSkipped = "skipped"
+	statusOK      = metrics.StatusOK
+	statusError   = metrics.StatusError
+	statusSkipped = metrics.StatusSkipped
 )
 
 // Processor handles consumed events.
