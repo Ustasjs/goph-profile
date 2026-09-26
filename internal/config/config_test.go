@@ -37,6 +37,7 @@ func TestDefaults(t *testing.T) {
 	assert.Equal(t, "info", cfg.LogLevel)
 	assert.False(t, cfg.S3UseSSL)
 	assert.Equal(t, 8, cfg.Prefetch)
+	assert.Equal(t, "localhost:4317", cfg.OTLPEndpoint)
 }
 
 func TestEnvOverridesDefaults(t *testing.T) {
@@ -45,6 +46,7 @@ func TestEnvOverridesDefaults(t *testing.T) {
 	env["S3_BUCKET"] = "pics"
 	env["S3_USE_SSL"] = "true"
 	env["LOG_LEVEL"] = "debug"
+	env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "jaeger:4317"
 
 	cfg, err := load(t, nil, env)
 	require.NoError(t, err)
@@ -53,6 +55,13 @@ func TestEnvOverridesDefaults(t *testing.T) {
 	assert.Equal(t, "pics", cfg.S3Bucket)
 	assert.True(t, cfg.S3UseSSL)
 	assert.Equal(t, "debug", cfg.LogLevel)
+	assert.Equal(t, "jaeger:4317", cfg.OTLPEndpoint)
+}
+
+func TestOTLPEndpointFlagDisablesTracing(t *testing.T) {
+	cfg, err := load(t, []string{"-otlp-endpoint", ""}, required())
+	require.NoError(t, err)
+	assert.Empty(t, cfg.OTLPEndpoint)
 }
 
 func TestFlagsOverrideEnv(t *testing.T) {

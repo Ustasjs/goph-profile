@@ -1,0 +1,10 @@
+# Loads every dashboard JSON from the mounted folder.
+apiVersion: 1
+
+providers:
+  - name: gophprofile
+    folder: GophProfile
+    type: file
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

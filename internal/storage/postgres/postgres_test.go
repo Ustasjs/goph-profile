@@ -172,3 +172,26 @@ func TestSoftDelete(t *testing.T) {
 	// A second delete finds nothing to touch.
 	assert.ErrorIs(t, repo.SoftDelete(ctx, a.ID), avatar.ErrNotFound)
 }
+
+func TestStorageByUser(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+
+	userID := uuid.NewString()
+	first := newAvatar(userID)
+	_, err := repo.Create(ctx, first)
+	require.NoError(t, err)
+	second := newAvatar(userID)
+	_, err = repo.Create(ctx, second)
+	require.NoError(t, err)
+
+	usage, err := repo.StorageByUser(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2468), usage[userID])
+
+	// A soft-deleted avatar stops counting toward the usage.
+	require.NoError(t, repo.SoftDelete(ctx, second.ID))
+	usage, err = repo.StorageByUser(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1234), usage[userID])
+}

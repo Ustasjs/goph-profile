@@ -18,6 +18,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -28,10 +29,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/broker"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/httpserver"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 	"github.com/ustasjs/goph-profile/internal/storage/postgres"
@@ -59,7 +60,7 @@ func startSystem(t *testing.T) *system {
 		t.Skip("DATABASE_DSN, S3_ENDPOINT or RABBITMQ_URL is not set")
 	}
 
-	log := zap.NewNop()
+	log := slog.New(slog.DiscardHandler)
 	require.NoError(t, migrations.Run(dsn))
 
 	pool, err := pgxpool.New(context.Background(), dsn)
@@ -81,7 +82,7 @@ func startSystem(t *testing.T) *system {
 
 	repo := postgres.New(pool)
 	svc := service.New(repo, files, pub, log)
-	api := httptest.NewServer(httpserver.NewRouter(svc, nil, log))
+	api := httptest.NewServer(httpserver.NewRouter(svc, nil, metrics.NewServer(), log))
 	t.Cleanup(api.Close)
 
 	// The worker side: a real consumer drives the real processor.
@@ -89,7 +90,7 @@ func startSystem(t *testing.T) *system {
 	require.NoError(t, err)
 	cons.SetBackoff([]time.Duration{100 * time.Millisecond})
 
-	proc := processor.New(repo, files, log)
+	proc := processor.New(repo, files, metrics.NewWorker(), log)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

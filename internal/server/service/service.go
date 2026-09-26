@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"log/slog"
 	"net/http"
 
 	// Register decoders for dimension probing.
@@ -16,14 +17,22 @@ import (
 	_ "image/png"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	// Register the WebP decoder too: WebP has no stdlib decoder,
 	// and x/image supports decode only, which is all the probe needs.
 	_ "golang.org/x/image/webp"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 )
+
+// tracer is bound lazily to the global provider. Only the mutating
+// use cases get their own spans: the read paths are already visible
+// through the HTTP, database and S3 spans around them.
+var tracer = otel.Tracer("github.com/ustasjs/goph-profile/internal/server/service")
 
 // Repository is the metadata storage the service needs.
 type Repository interface {
@@ -52,11 +61,11 @@ type Service struct {
 	repo  Repository
 	files FileStore
 	pub   Publisher
-	log   *zap.Logger
+	log   *slog.Logger
 }
 
 // New builds the service.
-func New(repo Repository, files FileStore, pub Publisher, log *zap.Logger) *Service {
+func New(repo Repository, files FileStore, pub Publisher, log *slog.Logger) *Service {
 	return &Service{repo: repo, files: files, pub: pub, log: log}
 }
 
@@ -75,7 +84,14 @@ const maxFileNameLen = 255
 // Upload stores the file and its metadata. The record is created
 // first, so a failed S3 write leaves a visible failed row instead
 // of an orphaned object.
-func (s *Service) Upload(ctx context.Context, userID, fileName string, data []byte) (avatar.Avatar, error) {
+func (s *Service) Upload(ctx context.Context, userID, fileName string, data []byte) (_ avatar.Avatar, err error) {
+	ctx, span := tracer.Start(ctx, "upload_avatar", trace.WithAttributes(
+		attribute.String("user_id", userID),
+		attribute.String("file_name", fileName),
+		attribute.Int("file_size", len(data)),
+	))
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound, avatar.ErrNotOwner) }()
+
 	if runes := []rune(fileName); len(runes) > maxFileNameLen {
 		fileName = string(runes[:maxFileNameLen])
 	}
@@ -108,7 +124,7 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, data []by
 		// Best-effort compensation: mark the row failed so the
 		// stuck upload is visible; the original error matters more.
 		if markErr := s.repo.SetUploadStatus(ctx, a.ID, avatar.UploadStatusFailed); markErr != nil {
-			s.log.Error("mark upload failed", zap.String("avatar_id", a.ID), zap.Error(markErr))
+			s.log.ErrorContext(ctx, "mark upload failed", "avatar_id", a.ID, "error", markErr)
 		}
 		return avatar.Avatar{}, fmt.Errorf("store avatar file: %w", err)
 	}
@@ -127,7 +143,7 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, data []by
 		S3Key:    a.S3Key,
 	})
 	if err != nil {
-		s.log.Error("publish upload event", zap.String("avatar_id", a.ID), zap.Error(err))
+		s.log.ErrorContext(ctx, "publish upload event", "avatar_id", a.ID, "error", err)
 	}
 	return a, nil
 }
@@ -181,7 +197,13 @@ func (s *Service) ThumbnailFile(ctx context.Context, id, size string) (File, err
 
 // Delete soft-deletes one avatar after the ownership check. The S3
 // objects are removed asynchronously by the worker.
-func (s *Service) Delete(ctx context.Context, id, requesterID string) error {
+func (s *Service) Delete(ctx context.Context, id, requesterID string) (err error) {
+	ctx, span := tracer.Start(ctx, "delete_avatar", trace.WithAttributes(
+		attribute.String("avatar_id", id),
+		attribute.String("user_id", requesterID),
+	))
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound, avatar.ErrNotOwner) }()
+
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -194,7 +216,12 @@ func (s *Service) Delete(ctx context.Context, id, requesterID string) error {
 
 // DeleteLatest soft-deletes the newest avatar of the user. Only the
 // user themselves may do it.
-func (s *Service) DeleteLatest(ctx context.Context, userID, requesterID string) error {
+func (s *Service) DeleteLatest(ctx context.Context, userID, requesterID string) (err error) {
+	ctx, span := tracer.Start(ctx, "delete_latest_avatar", trace.WithAttributes(
+		attribute.String("user_id", userID),
+	))
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound, avatar.ErrNotOwner) }()
+
 	if userID != requesterID {
 		return avatar.ErrNotOwner
 	}
@@ -224,7 +251,7 @@ func (s *Service) deleteAvatar(ctx context.Context, a avatar.Avatar) error {
 	// acceptable for the MVP.
 	err := s.pub.PublishDelete(ctx, avatar.DeleteEvent{AvatarID: a.ID, S3Keys: keys})
 	if err != nil {
-		s.log.Error("publish delete event", zap.String("avatar_id", a.ID), zap.Error(err))
+		s.log.ErrorContext(ctx, "publish delete event", "avatar_id", a.ID, "error", err)
 	}
 	return nil
 }

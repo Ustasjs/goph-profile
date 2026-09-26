@@ -4,13 +4,17 @@ package httpserver
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ustasjs/goph-profile/internal/metrics"
 )
 
 const (
@@ -28,11 +32,11 @@ type Server struct {
 }
 
 // New builds the server with all routes attached.
-func New(addr string, svc AvatarService, checks []HealthCheck, log *zap.Logger) *Server {
+func New(addr string, svc AvatarService, checks []HealthCheck, m *metrics.Server, log *slog.Logger) *Server {
 	return &Server{
 		http: &http.Server{
 			Addr:              addr,
-			Handler:           NewRouter(svc, checks, log),
+			Handler:           NewRouter(svc, checks, m, log),
 			ReadHeaderTimeout: readHeaderTimeout,
 		},
 	}
@@ -70,11 +74,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // NewRouter wires the routes. Split from New so tests can drive the
 // handlers through httptest without opening a port.
-func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Handler {
-	h := &handlers{svc: svc, log: log}
+func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *slog.Logger) http.Handler {
+	h := &handlers{svc: svc, m: m, log: log}
 
 	r := chi.NewRouter()
-	r.Use(recovery(log), logging(log))
+	r.Use(recovery(log), tracing(), observability(m, log))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/avatars", h.upload)
@@ -88,6 +92,7 @@ func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Ha
 	})
 
 	r.Get("/health", healthHandler(checks))
+	r.Method(http.MethodGet, "/metrics", m.Handler())
 
 	r.Get("/", servePage(pageUpload))
 	r.Get("/web/upload", servePage(pageUpload))
@@ -96,33 +101,84 @@ func NewRouter(svc AvatarService, checks []HealthCheck, log *zap.Logger) http.Ha
 	r.Post("/web/upload", h.upload)
 	r.Get("/web/gallery/{userID}", servePage(pageGallery))
 
-	return r
+	// otelhttp opens the server span; the technical endpoints are
+	// not traced.
+	return otelhttp.NewHandler(r, "http.server",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return !isTechnical(r.URL.Path)
+		}))
 }
 
-// logging writes one line per request.
-func logging(log *zap.Logger) func(http.Handler) http.Handler {
+// isTechnical reports whether the path is a timer-driven service
+// endpoint (probes, scrapes). The single list keeps tracing, logging
+// and metrics agreeing on what to ignore: those endpoints fire every
+// few seconds and would drown the real traffic everywhere.
+func isTechnical(path string) bool {
+	return path == "/health" || path == "/metrics"
+}
+
+// tracing names the server span after the matched route and exposes
+// the trace id to the client, so any curl response can be looked up
+// in the trace UI directly.
+func tracing() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			span := trace.SpanFromContext(r.Context())
+			if sc := span.SpanContext(); sc.IsValid() {
+				w.Header().Set("X-Trace-Id", sc.TraceID().String())
+			}
+			next.ServeHTTP(w, r)
+			// The route pattern is known only after routing, hence
+			// the rename after the handler instead of a span name at
+			// the start.
+			if pattern := chi.RouteContext(r.Context()).RoutePattern(); pattern != "" {
+				span.SetName(r.Method + " " + pattern)
+			}
+		})
+	}
+}
+
+// observability wraps the writer once and feeds one measurement to
+// both the request log line and the RED metrics. The technical
+// endpoints get neither.
+func observability(m *metrics.Server, log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isTechnical(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			start := time.Now()
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
-			log.Info("request",
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.Int("status", sw.status),
-				zap.Duration("duration", time.Since(start)))
+			elapsed := time.Since(start)
+
+			log.InfoContext(r.Context(), "request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", sw.status,
+				"duration", elapsed)
+
+			// The route pattern keeps the label cardinality bounded;
+			// requests that matched nothing share one bucket.
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = "unmatched"
+			}
+			m.ObserveRequest(r.Method, route, sw.status, elapsed.Seconds())
 		})
 	}
 }
 
 // recovery turns a handler panic into a 500 instead of killing the
 // connection.
-func recovery(log *zap.Logger) func(http.Handler) http.Handler {
+func recovery(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					log.Error("handler panic", zap.Any("panic", rec), zap.String("path", r.URL.Path))
+					log.ErrorContext(r.Context(), "handler panic", "panic", rec, "path", r.URL.Path)
 					writeError(w, http.StatusInternalServerError, "internal error")
 				}
 			}()
