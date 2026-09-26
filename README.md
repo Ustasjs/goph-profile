@@ -89,6 +89,8 @@ make run-worker               # worker (в другом терминале)
 
 **Логи** — slog, JSON в stdout. Записи в request-path несут `trace_id`/`span_id` активного спана. Promtail собирает логи контейнеров проекта в Loki; в Grafana Explore клик по `trace_id` открывает трейс в Jaeger (derived field). Логи нативных `make run`-процессов остаются в терминале — доставка логов задача платформы, а не приложения.
 
+**Почему Loki, а не ELK/OpenSearch.** ТЗ допускает «Grafana Loki или OpenSearch/ELK»; выбран Loki осознанно. Во-первых, он на порядок легче для локального стенда: один Go-бинарник против JVM-кластера OpenSearch + отдельного Dashboards (~2GB RAM) — а в compose и так десять контейнеров. Во-вторых, весь UI наблюдаемости остаётся в одной Grafana, которая уже нужна для дашбордов: логи, метрики и переход в трейс — в одном окне, без второго интерфейса. Функциональность критерия при этом закрыта: Promtail индексирует логи по лейблам (`service`, `level`, `container`), Explore даёт поиск и фильтрацию (полнотекстовый `|=`, парсинг JSON-полей через `| json`), клик по `trace_id` открывает трейс в Jaeger.
+
 **Дашборды** — provisioned в папке GophProfile: Service Overview (RED), Resources (пулы, runtime, очереди), Business KPIs (загрузки по исходам, storage, обработка, глубина DLQ). JSON лежат в `deploy/grafana/dashboards/` и подхватываются на лету.
 
 ## Разработка
