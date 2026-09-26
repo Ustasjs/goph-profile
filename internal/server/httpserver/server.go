@@ -101,13 +101,20 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 	r.Post("/web/upload", h.upload)
 	r.Get("/web/gallery/{userID}", servePage(pageGallery))
 
-	// otelhttp opens the server span; health checks and metric
-	// scrapes fire every few seconds and would drown real requests
-	// in the trace UI, so they are not traced.
+	// otelhttp opens the server span; the technical endpoints are
+	// not traced.
 	return otelhttp.NewHandler(r, "http.server",
 		otelhttp.WithFilter(func(r *http.Request) bool {
-			return r.URL.Path != "/health" && r.URL.Path != "/metrics"
+			return !isTechnical(r.URL.Path)
 		}))
+}
+
+// isTechnical reports whether the path is a timer-driven service
+// endpoint (probes, scrapes). The single list keeps tracing, logging
+// and metrics agreeing on what to ignore: those endpoints fire every
+// few seconds and would drown the real traffic everywhere.
+func isTechnical(path string) bool {
+	return path == "/health" || path == "/metrics"
 }
 
 // tracing names the server span after the matched route and exposes
@@ -132,13 +139,12 @@ func tracing() func(http.Handler) http.Handler {
 }
 
 // observability wraps the writer once and feeds one measurement to
-// both the request log line and the RED metrics. Health checks and
-// metric scrapes fire on timers every few seconds: they would drown
-// the logs and dominate every rate, so they get neither.
+// both the request log line and the RED metrics. The technical
+// endpoints get neither.
 func observability(m *metrics.Server, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+			if isTechnical(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
