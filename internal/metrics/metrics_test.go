@@ -10,56 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// doGet performs one request and discards the response.
-func doGet(t *testing.T, srv *httptest.Server, path string) {
-	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+path, nil)
-	require.NoError(t, err)
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-}
-
-func TestMiddlewareRecordsRoutePattern(t *testing.T) {
+func TestObserveRequest(t *testing.T) {
 	m := NewServer()
-
-	r := chi.NewRouter()
-	r.Use(m.Middleware())
-	r.Get("/api/v1/avatars/{avatarID}", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	})
-
-	srv := httptest.NewServer(r)
-	defer srv.Close()
-	doGet(t, srv, "/api/v1/avatars/abc")
+	m.ObserveRequest("GET", "/api/v1/avatars/{avatarID}", 404, 0.05)
 
 	got := testutil.ToFloat64(m.requests.WithLabelValues("GET", "/api/v1/avatars/{avatarID}", "404"))
 	assert.Equal(t, 1.0, got)
 	assert.Equal(t, 1, testutil.CollectAndCount(m.duration, "http_request_duration_seconds"))
-}
-
-func TestMiddlewareSkipsHealthAndMetrics(t *testing.T) {
-	m := NewServer()
-
-	r := chi.NewRouter()
-	r.Use(m.Middleware())
-	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
-	r.Get("/health", ok)
-	r.Get("/metrics", ok)
-
-	srv := httptest.NewServer(r)
-	defer srv.Close()
-	for _, path := range []string{"/health", "/metrics"} {
-		doGet(t, srv, path)
-	}
-
-	assert.Equal(t, 0, testutil.CollectAndCount(m.requests, "http_requests_total"))
 }
 
 func TestObserveUpload(t *testing.T) {

@@ -78,7 +78,7 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 	h := &handlers{svc: svc, m: m, log: log}
 
 	r := chi.NewRouter()
-	r.Use(recovery(log), tracing(), m.Middleware(), logging(log))
+	r.Use(recovery(log), tracing(), observability(m, log))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/avatars", h.upload)
@@ -131,18 +131,36 @@ func tracing() func(http.Handler) http.Handler {
 	}
 }
 
-// logging writes one line per request.
-func logging(log *slog.Logger) func(http.Handler) http.Handler {
+// observability wraps the writer once and feeds one measurement to
+// both the request log line and the RED metrics. Health checks and
+// metric scrapes fire on timers every few seconds: they would drown
+// the logs and dominate every rate, so they get neither.
+func observability(m *metrics.Server, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			start := time.Now()
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
+			elapsed := time.Since(start)
+
 			log.InfoContext(r.Context(), "request",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", sw.status,
-				"duration", time.Since(start))
+				"duration", elapsed)
+
+			// The route pattern keeps the label cardinality bounded;
+			// requests that matched nothing share one bucket.
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = "unmatched"
+			}
+			m.ObserveRequest(r.Method, route, sw.status, elapsed.Seconds())
 		})
 	}
 }

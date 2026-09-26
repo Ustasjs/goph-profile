@@ -8,9 +8,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -108,31 +106,12 @@ func (s *Server) RegisterStorage(usage func(ctx context.Context) (map[string]int
 	s.reg.MustRegister(&storageCollector{usage: usage})
 }
 
-// Middleware records the RED metrics per request. Health checks and
-// metric scrapes fire on timers and would dominate every rate, so
-// they are not counted.
-func (s *Server) Middleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			start := time.Now()
-			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(sw, r)
-
-			// The route pattern keeps the label cardinality bounded;
-			// requests that matched nothing share one bucket.
-			route := chi.RouteContext(r.Context()).RoutePattern()
-			if route == "" {
-				route = "unmatched"
-			}
-			s.requests.WithLabelValues(r.Method, route, strconv.Itoa(sw.status)).Inc()
-			s.duration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
-		})
-	}
+// ObserveRequest records one finished HTTP request in the RED
+// instruments. Capturing the status and matching the route is the
+// HTTP layer's job; this package only turns them into label values.
+func (s *Server) ObserveRequest(method, route string, status int, seconds float64) {
+	s.requests.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
+	s.duration.WithLabelValues(method, route).Observe(seconds)
 }
 
 // Worker holds the event-processing instruments.
@@ -165,14 +144,4 @@ func NewWorker() *Worker {
 func (w *Worker) ObserveProcessed(event, status string, seconds float64) {
 	w.processed.WithLabelValues(event, status).Inc()
 	w.procDuration.WithLabelValues(event).Observe(seconds)
-}
-
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (w *statusWriter) WriteHeader(code int) {
-	w.status = code
-	w.ResponseWriter.WriteHeader(code)
 }
