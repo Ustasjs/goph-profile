@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	// Register the WebP decoder too: WebP has no stdlib decoder,
@@ -27,6 +26,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 )
 
 // tracer is bound lazily to the global provider. Only the mutating
@@ -90,7 +90,7 @@ func (s *Service) Upload(ctx context.Context, userID, fileName string, data []by
 		attribute.String("file_name", fileName),
 		attribute.Int("file_size", len(data)),
 	))
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound, avatar.ErrNotOwner) }()
 
 	if runes := []rune(fileName); len(runes) > maxFileNameLen {
 		fileName = string(runes[:maxFileNameLen])
@@ -202,7 +202,7 @@ func (s *Service) Delete(ctx context.Context, id, requesterID string) (err error
 		attribute.String("avatar_id", id),
 		attribute.String("user_id", requesterID),
 	))
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound, avatar.ErrNotOwner) }()
 
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -220,7 +220,7 @@ func (s *Service) DeleteLatest(ctx context.Context, userID, requesterID string) 
 	ctx, span := tracer.Start(ctx, "delete_latest_avatar", trace.WithAttributes(
 		attribute.String("user_id", userID),
 	))
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound, avatar.ErrNotOwner) }()
 
 	if userID != requesterID {
 		return avatar.ErrNotOwner
@@ -254,16 +254,6 @@ func (s *Service) deleteAvatar(ctx context.Context, a avatar.Avatar) error {
 		s.log.ErrorContext(ctx, "publish delete event", "avatar_id", a.ID, "error", err)
 	}
 	return nil
-}
-
-// finishSpan closes the span, marking it failed only for real
-// failures: not-found and not-owner are expected business answers.
-func finishSpan(span trace.Span, err error) {
-	if err != nil && !errors.Is(err, avatar.ErrNotFound) && !errors.Is(err, avatar.ErrNotOwner) {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "operation failed")
-	}
-	span.End()
 }
 
 func (s *Service) openOriginal(ctx context.Context, a avatar.Avatar) (File, error) {

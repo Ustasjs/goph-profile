@@ -12,10 +12,10 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 )
 
 // tracer is bound lazily to the global provider. minio-go has no
@@ -31,17 +31,6 @@ func (s *Store) startSpan(ctx context.Context, op, key string) (context.Context,
 	return tracer.Start(ctx, op,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...))
-}
-
-// finishSpan closes the span, marking it failed when err is a real
-// error. A missing object (avatar.ErrNotFound) is an expected answer,
-// not a storage failure.
-func finishSpan(span trace.Span, err error) {
-	if err != nil && !errors.Is(err, avatar.ErrNotFound) {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "s3 operation failed")
-	}
-	span.End()
 }
 
 // Config carries the connection settings.
@@ -85,7 +74,7 @@ func New(cfg Config) (*Store, error) {
 // EnsureBucket creates the bucket when it does not exist yet.
 func (s *Store) EnsureBucket(ctx context.Context) (err error) {
 	ctx, span := s.startSpan(ctx, "s3.EnsureBucket", "")
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound) }()
 
 	exists, err := s.client.BucketExists(ctx, s.bucket)
 	if err != nil {
@@ -117,7 +106,7 @@ func (s *Store) Ping(ctx context.Context) error {
 // Put writes one object.
 func (s *Store) Put(ctx context.Context, key, contentType string, r io.Reader, size int64) (err error) {
 	ctx, span := s.startSpan(ctx, "s3.Put", key)
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound) }()
 
 	_, err = s.client.PutObject(ctx, s.bucket, key, r, size,
 		minio.PutObjectOptions{ContentType: contentType})
@@ -133,7 +122,7 @@ func (s *Store) Put(ctx context.Context, key, contentType string, r io.Reader, s
 // that the caller does afterwards.
 func (s *Store) Get(ctx context.Context, key string) (_ io.ReadCloser, err error) {
 	ctx, span := s.startSpan(ctx, "s3.Get", key)
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound) }()
 
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
@@ -158,7 +147,7 @@ func (s *Store) Get(ctx context.Context, key string) (_ io.ReadCloser, err error
 // error: the operation is idempotent by design.
 func (s *Store) Delete(ctx context.Context, key string) (err error) {
 	ctx, span := s.startSpan(ctx, "s3.Delete", key)
-	defer func() { finishSpan(span, err) }()
+	defer func() { telemetry.End(span, err, avatar.ErrNotFound) }()
 
 	if err = s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 		if isNoSuchKey(err) {

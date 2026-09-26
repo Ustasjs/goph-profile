@@ -17,6 +17,7 @@ import (
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 	"github.com/ustasjs/goph-profile/internal/metrics"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 	"github.com/ustasjs/goph-profile/internal/worker/thumbnail"
 )
 
@@ -73,7 +74,7 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (er
 		attribute.String("avatar_id", ev.AvatarID),
 		attribute.String("user_id", ev.UserID),
 	))
-	defer span.End()
+	defer func() { telemetry.End(span, err) }()
 
 	status := statusError
 	start := time.Now()
@@ -120,7 +121,7 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (er
 		_, thumbSpan := tracer.Start(ctx, "generate_thumbnail",
 			trace.WithAttributes(attribute.Int("size_px", px)))
 		thumb, err := thumbnail.Generate(src, px)
-		thumbSpan.End()
+		telemetry.End(thumbSpan, err)
 		if err != nil {
 			// Not an image: retrying cannot help, so the avatar is
 			// marked failed and the message is consumed.
@@ -152,7 +153,7 @@ func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) (er
 		attribute.String("avatar_id", ev.AvatarID),
 		attribute.Int("keys", len(ev.S3Keys)),
 	))
-	defer span.End()
+	defer func() { telemetry.End(span, err) }()
 
 	status := statusError
 	start := time.Now()
