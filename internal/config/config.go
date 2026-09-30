@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	defaultRunAddress = ":8080"
-	defaultLogLevel   = "info"
-	defaultS3Bucket   = "avatars"
-	defaultPrefetch   = 8
+	defaultRunAddress   = ":8080"
+	defaultLogLevel     = "info"
+	defaultS3Bucket     = "avatars"
+	defaultPrefetch     = 8
+	defaultOTLPEndpoint = "localhost:4317"
+	defaultMetricsAddr  = ":9091"
 )
 
 // Config holds all server settings.
@@ -39,8 +41,14 @@ type Config struct {
 	RabbitURL string
 	// Prefetch caps the unacknowledged deliveries per worker.
 	Prefetch int
-	// LogLevel is a zap level name: debug, info, warn, error.
+	// LogLevel is a level name: debug, info, warn, error.
 	LogLevel string
+	// OTLPEndpoint is the OTLP gRPC collector host:port for traces.
+	// Empty disables tracing.
+	OTLPEndpoint string
+	// MetricsAddress is the worker's /metrics listen address. The
+	// server serves /metrics on RunAddress instead.
+	MetricsAddress string
 }
 
 // Load reads the settings for the running program. It must be
@@ -53,21 +61,25 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 // many times with their own arguments and environment.
 func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, bool)) (Config, error) {
 	cfg := Config{
-		RunAddress: defaultRunAddress,
-		S3Bucket:   defaultS3Bucket,
-		Prefetch:   defaultPrefetch,
-		LogLevel:   defaultLogLevel,
+		RunAddress:     defaultRunAddress,
+		S3Bucket:       defaultS3Bucket,
+		Prefetch:       defaultPrefetch,
+		LogLevel:       defaultLogLevel,
+		OTLPEndpoint:   defaultOTLPEndpoint,
+		MetricsAddress: defaultMetricsAddr,
 	}
 
 	stringVars := map[string]*string{
-		"RUN_ADDRESS":   &cfg.RunAddress,
-		"DATABASE_DSN":  &cfg.DatabaseDSN,
-		"S3_ENDPOINT":   &cfg.S3Endpoint,
-		"S3_ACCESS_KEY": &cfg.S3AccessKey,
-		"S3_SECRET_KEY": &cfg.S3SecretKey,
-		"S3_BUCKET":     &cfg.S3Bucket,
-		"RABBITMQ_URL":  &cfg.RabbitURL,
-		"LOG_LEVEL":     &cfg.LogLevel,
+		"RUN_ADDRESS":                 &cfg.RunAddress,
+		"DATABASE_DSN":                &cfg.DatabaseDSN,
+		"S3_ENDPOINT":                 &cfg.S3Endpoint,
+		"S3_ACCESS_KEY":               &cfg.S3AccessKey,
+		"S3_SECRET_KEY":               &cfg.S3SecretKey,
+		"S3_BUCKET":                   &cfg.S3Bucket,
+		"RABBITMQ_URL":                &cfg.RabbitURL,
+		"LOG_LEVEL":                   &cfg.LogLevel,
+		"OTEL_EXPORTER_OTLP_ENDPOINT": &cfg.OTLPEndpoint,
+		"METRICS_ADDRESS":             &cfg.MetricsAddress,
 	}
 	for name, dst := range stringVars {
 		if v, ok := lookupEnv(name); ok {
@@ -99,6 +111,8 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 	fs.StringVar(&cfg.RabbitURL, "rabbit-url", cfg.RabbitURL, "AMQP connection string")
 	fs.IntVar(&cfg.Prefetch, "prefetch", cfg.Prefetch, "max unacknowledged deliveries per worker")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
+	fs.StringVar(&cfg.OTLPEndpoint, "otlp-endpoint", cfg.OTLPEndpoint, "OTLP gRPC endpoint for traces, empty disables tracing")
+	fs.StringVar(&cfg.MetricsAddress, "metrics-address", cfg.MetricsAddress, "worker /metrics listen address")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
 	}

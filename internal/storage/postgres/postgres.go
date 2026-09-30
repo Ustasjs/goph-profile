@@ -125,6 +125,34 @@ func (r *Repository) SoftDelete(ctx context.Context, id string) error {
 		 WHERE id = $1 AND deleted_at IS NULL`, id)
 }
 
+// StorageByUser sums the live avatar bytes per user. The metrics
+// collector calls it on every scrape, so it must stay one cheap
+// grouped query.
+func (r *Repository) StorageByUser(ctx context.Context) (map[string]int64, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT user_id, SUM(size_bytes) FROM avatars
+		 WHERE deleted_at IS NULL
+		 GROUP BY user_id`)
+	if err != nil {
+		return nil, fmt.Errorf("sum storage: %w", err)
+	}
+	defer rows.Close()
+
+	usage := map[string]int64{}
+	for rows.Next() {
+		var userID string
+		var bytes int64
+		if err := rows.Scan(&userID, &bytes); err != nil {
+			return nil, fmt.Errorf("scan storage row: %w", err)
+		}
+		usage[userID] = bytes
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sum storage: %w", err)
+	}
+	return usage, nil
+}
+
 // exec runs one UPDATE and turns "no rows touched" into ErrNotFound.
 func (r *Repository) exec(ctx context.Context, sql string, args ...any) error {
 	tag, err := r.pool.Exec(ctx, sql, args...)

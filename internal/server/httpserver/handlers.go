@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"sort"
@@ -13,9 +14,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 )
 
@@ -56,7 +57,8 @@ type AvatarService interface {
 
 type handlers struct {
 	svc AvatarService
-	log *zap.Logger
+	m   *metrics.Server
+	log *slog.Logger
 }
 
 // uploadResponse is the 201 body of POST /api/v1/avatars.
@@ -71,6 +73,12 @@ type uploadResponse struct {
 }
 
 func (h *handlers) upload(w http.ResponseWriter, r *http.Request) {
+	// Every exit before the service call is a client mistake, so the
+	// rejected outcome is the default and success flips it at the end.
+	status := metrics.StatusRejected
+	start := time.Now()
+	defer func() { h.m.ObserveUpload(status, time.Since(start).Seconds()) }()
+
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -107,10 +115,12 @@ func (h *handlers) upload(w http.ResponseWriter, r *http.Request) {
 
 	a, err := h.svc.Upload(r.Context(), userID, header.Filename, data)
 	if err != nil {
-		h.serviceError(w, err)
+		status = metrics.StatusError
+		h.serviceError(r.Context(), w, err)
 		return
 	}
 
+	status = metrics.StatusOK
 	writeJSON(w, http.StatusCreated, uploadResponse{
 		ID:        a.ID,
 		UserID:    a.UserID,
@@ -136,31 +146,31 @@ func formFile(r *http.Request) (multipart.File, *multipart.FileHeader, error) {
 func (h *handlers) getFile(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.GetFile(r.Context(), chi.URLParam(r, "avatarID"))
 	if err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
-	h.streamFile(w, f)
+	h.streamFile(r.Context(), w, f)
 }
 
 func (h *handlers) latestFile(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.LatestFile(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
-	h.streamFile(w, f)
+	h.streamFile(r.Context(), w, f)
 }
 
 func (h *handlers) getThumbnail(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.ThumbnailFile(r.Context(), chi.URLParam(r, "avatarID"), chi.URLParam(r, "size"))
 	if err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
-	h.streamFile(w, f)
+	h.streamFile(r.Context(), w, f)
 }
 
-func (h *handlers) streamFile(w http.ResponseWriter, f service.File) {
+func (h *handlers) streamFile(ctx context.Context, w http.ResponseWriter, f service.File) {
 	defer func() { _ = f.Body.Close() }()
 	w.Header().Set("Content-Type", f.ContentType)
 	if f.Size > 0 {
@@ -169,7 +179,7 @@ func (h *handlers) streamFile(w http.ResponseWriter, f service.File) {
 	if _, err := io.Copy(w, f.Body); err != nil {
 		// Headers are gone; nothing to answer. Usually the client
 		// hung up mid-download.
-		h.log.Debug("stream avatar", zap.Error(err))
+		h.log.DebugContext(ctx, "stream avatar", "error", err)
 	}
 }
 
@@ -224,7 +234,7 @@ func toMetadata(a avatar.Avatar) metadataResponse {
 func (h *handlers) metadata(w http.ResponseWriter, r *http.Request) {
 	a, err := h.svc.Metadata(r.Context(), chi.URLParam(r, "avatarID"))
 	if err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toMetadata(a))
@@ -233,7 +243,7 @@ func (h *handlers) metadata(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) list(w http.ResponseWriter, r *http.Request) {
 	avatars, err := h.svc.List(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
 	items := make([]metadataResponse, 0, len(avatars))
@@ -249,7 +259,7 @@ func (h *handlers) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "avatarID"), userID); err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -261,14 +271,14 @@ func (h *handlers) deleteLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.DeleteLatest(r.Context(), chi.URLParam(r, "userID"), userID); err != nil {
-		h.serviceError(w, err)
+		h.serviceError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // serviceError maps domain errors to HTTP answers.
-func (h *handlers) serviceError(w http.ResponseWriter, err error) {
+func (h *handlers) serviceError(ctx context.Context, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, avatar.ErrNotFound):
 		writeError(w, http.StatusNotFound, "Avatar not found")
@@ -278,7 +288,7 @@ func (h *handlers) serviceError(w http.ResponseWriter, err error) {
 			"details": "You can only delete your own avatars",
 		})
 	default:
-		h.log.Error("service error", zap.Error(err))
+		h.log.ErrorContext(ctx, "service error", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
 }

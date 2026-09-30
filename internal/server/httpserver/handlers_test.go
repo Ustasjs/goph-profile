@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -16,9 +17,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 )
 
@@ -89,7 +90,7 @@ func (f *fakeService) DeleteLatest(_ context.Context, _, userID string) error {
 
 func newTestServer(t *testing.T, svc AvatarService, checks ...HealthCheck) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(NewRouter(svc, checks, zap.NewNop()))
+	srv := httptest.NewServer(NewRouter(svc, checks, metrics.NewServer(), slog.New(slog.DiscardHandler)))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -401,7 +402,7 @@ func TestPanicRecovery(t *testing.T) {
 }
 
 func TestServerShutdown(t *testing.T) {
-	srv := New("127.0.0.1:0", &fakeService{}, nil, zap.NewNop())
+	srv := New("127.0.0.1:0", &fakeService{}, nil, metrics.NewServer(), slog.New(slog.DiscardHandler))
 
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()
@@ -434,4 +435,33 @@ func TestWebPages(t *testing.T) {
 			assert.Contains(t, string(resp.body), "<html")
 		})
 	}
+}
+
+// TestObservabilityMiddleware checks the single writer wrap: one
+// request feeds both the log line and the RED metrics with the chi
+// route pattern, while the timer-driven endpoints get neither.
+func TestObservabilityMiddleware(t *testing.T) {
+	m := metrics.NewServer()
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	srv := httptest.NewServer(NewRouter(&fakeService{getErr: avatar.ErrNotFound}, nil, m, log))
+	t.Cleanup(srv.Close)
+
+	resp := doGet(t, srv, "/api/v1/avatars/nope")
+	require.Equal(t, http.StatusNotFound, resp.status)
+	resp = doGet(t, srv, "/health")
+	require.Equal(t, http.StatusOK, resp.status)
+
+	scrape := doGet(t, srv, "/metrics")
+	require.Equal(t, http.StatusOK, scrape.status)
+	body := string(scrape.body)
+	assert.Contains(t, body,
+		`http_requests_total{method="GET",route="/api/v1/avatars/{avatarID}",status="404"} 1`)
+	assert.NotContains(t, body, `route="/health"`)
+	assert.NotContains(t, body, `route="/metrics"`)
+
+	logs := logBuf.String()
+	assert.Contains(t, logs, `"path":"/api/v1/avatars/nope"`)
+	assert.NotContains(t, logs, `"path":"/health"`)
+	assert.NotContains(t, logs, `"path":"/metrics"`)
 }

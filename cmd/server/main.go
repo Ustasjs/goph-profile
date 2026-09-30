@@ -6,23 +6,26 @@ import (
 	"errors"
 	"fmt"
 	stdlog "log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ustasjs/goph-profile/internal/broker"
 	"github.com/ustasjs/goph-profile/internal/config"
 	"github.com/ustasjs/goph-profile/internal/logger"
+	"github.com/ustasjs/goph-profile/internal/metrics"
 	"github.com/ustasjs/goph-profile/internal/server/httpserver"
 	"github.com/ustasjs/goph-profile/internal/server/service"
 	"github.com/ustasjs/goph-profile/internal/storage/postgres"
 	"github.com/ustasjs/goph-profile/internal/storage/s3"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 	"github.com/ustasjs/goph-profile/migrations"
 )
 
@@ -51,16 +54,28 @@ func main() {
 	}
 
 	if err := run(cfg, log); err != nil {
-		log.Error("server terminated with error", zap.Error(err))
-		_ = log.Sync()
+		log.Error("server terminated with error", "error", err)
 		os.Exit(1)
 	}
-	_ = log.Sync()
 }
 
-func run(cfg config.Config, log *zap.Logger) error {
+func run(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+
+	shutdownTracing, err := telemetry.Setup(ctx, "gophprofile-server", cfg.OTLPEndpoint)
+	if err != nil {
+		return err
+	}
+	// The flush gets its own context: by this point ctx is already
+	// canceled by the shutdown signal.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			log.Warn("flush traces", "error", err)
+		}
+	}()
 
 	if cfg.DatabaseDSN == "" {
 		return errors.New("database DSN is required: set DATABASE_DSN or -d")
@@ -69,7 +84,12 @@ func run(cfg config.Config, log *zap.Logger) error {
 		return err
 	}
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseDSN)
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseDSN)
+	if err != nil {
+		return fmt.Errorf("parse database dsn: %w", err)
+	}
+	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return fmt.Errorf("create pgx pool: %w", err)
 	}
@@ -100,17 +120,22 @@ func run(cfg config.Config, log *zap.Logger) error {
 
 	repo := postgres.New(pool)
 	svc := service.New(repo, files, pub, log)
+
+	m := metrics.NewServer()
+	m.RegisterPool(pool.Stat)
+	m.RegisterStorage(repo.StorageByUser)
+
 	checks := []httpserver.HealthCheck{
 		{Name: "db", Check: pool.Ping},
 		{Name: "s3", Check: files.Ping},
 		{Name: "broker", Check: pub.Ping},
 	}
-	server := httpserver.New(cfg.RunAddress, svc, checks, log)
+	server := httpserver.New(cfg.RunAddress, svc, checks, m, log)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		log.Info("starting HTTP server", zap.String("address", cfg.RunAddress))
+		log.Info("starting HTTP server", "address", cfg.RunAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}

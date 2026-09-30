@@ -7,9 +7,17 @@ import (
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 )
+
+// tracer is bound lazily to the global provider, so it works no matter
+// whether telemetry.Setup ran before or after this package's use.
+var tracer = otel.Tracer("github.com/ustasjs/goph-profile/internal/broker")
 
 // Publisher sends avatar events. It holds one connection and one
 // channel; a lost connection surfaces as publish errors, which the
@@ -52,12 +60,28 @@ func (p *Publisher) PublishDelete(ctx context.Context, ev avatar.DeleteEvent) er
 }
 
 func (p *Publisher) publish(ctx context.Context, key, messageID string, body any) error {
+	ctx, span := tracer.Start(ctx, "publish "+key,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "rabbitmq"),
+			attribute.String("messaging.destination.name", key),
+			attribute.String("messaging.message.id", messageID),
+		))
+	defer span.End()
+
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
+
+	// The trace context rides in the message headers, so the worker
+	// continues this trace on the consuming side.
+	headers := amqp.Table{}
+	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
+
 	err = p.ch.PublishWithContext(ctx, Exchange, key, false, false, amqp.Publishing{
 		ContentType: "application/json",
+		Headers:     headers,
 		// The avatar id doubles as the message id, so consumers can
 		// deduplicate deliveries.
 		MessageId:    messageID,
@@ -65,6 +89,8 @@ func (p *Publisher) publish(ctx context.Context, key, messageID string, body any
 		Body:         data,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish failed")
 		return fmt.Errorf("publish %s: %w", key, err)
 	}
 	return nil

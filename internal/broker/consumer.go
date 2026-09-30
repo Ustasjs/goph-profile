@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"go.uber.org/zap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
@@ -33,12 +37,12 @@ type Consumer struct {
 	conn    *amqp.Connection
 	ch      *amqp.Channel
 	backoff []time.Duration
-	log     *zap.Logger
+	log     *slog.Logger
 }
 
 // NewConsumer dials the broker, declares the topology and caps the
 // in-flight deliveries at prefetch.
-func NewConsumer(url string, prefetch int, log *zap.Logger) (*Consumer, error) {
+func NewConsumer(url string, prefetch int, log *slog.Logger) (*Consumer, error) {
 	if url == "" {
 		return nil, errors.New("broker: url is required")
 	}
@@ -158,10 +162,22 @@ func (c *Consumer) loop(ctx context.Context, msgs <-chan amqp.Delivery,
 func (c *Consumer) process(ctx context.Context, d amqp.Delivery,
 	handle func(context.Context, amqp.Delivery) error,
 	dead func(context.Context, amqp.Delivery)) {
+	// Continue the trace the publisher started: one span covers the
+	// delivery including all retry attempts.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier(d.Headers))
+	ctx, span := tracer.Start(ctx, "consume "+d.RoutingKey,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "rabbitmq"),
+			attribute.String("messaging.destination.name", d.RoutingKey),
+			attribute.String("messaging.message.id", d.MessageId),
+		))
+	defer span.End()
+
 	err := c.withRetry(ctx, d, handle)
 	if err == nil {
 		if ackErr := d.Ack(false); ackErr != nil {
-			c.log.Error("ack", zap.Error(ackErr))
+			c.log.ErrorContext(ctx, "ack", "error", ackErr)
 		}
 		return
 	}
@@ -173,16 +189,18 @@ func (c *Consumer) process(ctx context.Context, d amqp.Delivery,
 		return
 	}
 
-	c.log.Error("message exhausted retries, moving to dead queue",
-		zap.String("routing_key", d.RoutingKey),
-		zap.String("message_id", d.MessageId),
-		zap.Error(err))
+	span.RecordError(err)
+	span.SetStatus(codes.Error, "exhausted retries")
+	c.log.ErrorContext(ctx, "message exhausted retries, moving to dead queue",
+		"routing_key", d.RoutingKey,
+		"message_id", d.MessageId,
+		"error", err)
 	if dead != nil {
 		dead(ctx, d)
 	}
 	// requeue=false sends the message to the dead-letter exchange.
 	if nackErr := d.Nack(false, false); nackErr != nil {
-		c.log.Error("nack", zap.Error(nackErr))
+		c.log.ErrorContext(ctx, "nack", "error", nackErr)
 	}
 }
 
@@ -195,11 +213,11 @@ func (c *Consumer) withRetry(ctx context.Context, d amqp.Delivery,
 		if err == nil || attempt >= len(c.backoff) || ctx.Err() != nil {
 			return err
 		}
-		c.log.Warn("handler failed, retrying",
-			zap.String("message_id", d.MessageId),
-			zap.Int("attempt", attempt+1),
-			zap.Duration("wait", c.backoff[attempt]),
-			zap.Error(err))
+		c.log.WarnContext(ctx, "handler failed, retrying",
+			"message_id", d.MessageId,
+			"attempt", attempt+1,
+			"wait", c.backoff[attempt],
+			"error", err)
 		select {
 		case <-ctx.Done():
 			return err

@@ -8,12 +8,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"time"
 
-	"go.uber.org/zap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
+	"github.com/ustasjs/goph-profile/internal/metrics"
+	"github.com/ustasjs/goph-profile/internal/telemetry"
 	"github.com/ustasjs/goph-profile/internal/worker/thumbnail"
 )
+
+// tracer is bound lazily to the global provider. The consumer span
+// wraps the whole delivery; these child spans separate the handler
+// work (and each thumbnail) inside it.
+var tracer = otel.Tracer("github.com/ustasjs/goph-profile/internal/worker/processor")
 
 // Repository is the metadata storage the processor needs.
 type Repository interface {
@@ -29,28 +40,53 @@ type FileStore interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// Observer records processing outcomes; the metrics registry
+// implements it. Each handler call is one attempt, so retries count
+// separately.
+type Observer interface {
+	ObserveProcessed(event, status string, seconds float64)
+}
+
+const (
+	statusOK      = metrics.StatusOK
+	statusError   = metrics.StatusError
+	statusSkipped = metrics.StatusSkipped
+)
+
 // Processor handles consumed events.
 type Processor struct {
 	repo  Repository
 	files FileStore
-	log   *zap.Logger
+	obs   Observer
+	log   *slog.Logger
 }
 
 // New builds the processor.
-func New(repo Repository, files FileStore, log *zap.Logger) *Processor {
-	return &Processor{repo: repo, files: files, log: log}
+func New(repo Repository, files FileStore, obs Observer, log *slog.Logger) *Processor {
+	return &Processor{repo: repo, files: files, obs: obs, log: log}
 }
 
 // HandleUpload builds and stores the thumbnails for one avatar.
 // Deliveries can repeat, so the work is guarded by the current
 // processing status.
-func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) error {
+func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) (err error) {
+	ctx, span := tracer.Start(ctx, "process_upload", trace.WithAttributes(
+		attribute.String("avatar_id", ev.AvatarID),
+		attribute.String("user_id", ev.UserID),
+	))
+	defer func() { telemetry.End(span, err) }()
+
+	status := statusError
+	start := time.Now()
+	defer func() { p.obs.ObserveProcessed("upload", status, time.Since(start).Seconds()) }()
+
 	a, err := p.repo.GetByID(ctx, ev.AvatarID)
 	if errors.Is(err, avatar.ErrNotFound) {
 		// Deleted (or never committed) while the event was in
 		// flight: nothing to process.
-		p.log.Info("upload event for a missing avatar, skipping",
-			zap.String("avatar_id", ev.AvatarID))
+		p.log.InfoContext(ctx, "upload event for a missing avatar, skipping",
+			"avatar_id", ev.AvatarID)
+		status = statusSkipped
 		return nil
 	}
 	if err != nil {
@@ -59,9 +95,10 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 	if a.ProcessingStatus == avatar.ProcessingStatusCompleted ||
 		a.ProcessingStatus == avatar.ProcessingStatusDeleted {
 		// A repeated delivery: the work is already done.
-		p.log.Info("avatar already processed, skipping",
-			zap.String("avatar_id", ev.AvatarID),
-			zap.String("status", a.ProcessingStatus))
+		p.log.InfoContext(ctx, "avatar already processed, skipping",
+			"avatar_id", ev.AvatarID,
+			"status", a.ProcessingStatus)
+		status = statusSkipped
 		return nil
 	}
 
@@ -81,12 +118,15 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 
 	keys := make(map[string]string, len(avatar.ThumbnailSizes))
 	for _, px := range avatar.ThumbnailSizes {
+		_, thumbSpan := tracer.Start(ctx, "generate_thumbnail",
+			trace.WithAttributes(attribute.Int("size_px", px)))
 		thumb, err := thumbnail.Generate(src, px)
+		telemetry.End(thumbSpan, err)
 		if err != nil {
 			// Not an image: retrying cannot help, so the avatar is
 			// marked failed and the message is consumed.
-			p.log.Warn("original does not decode, marking failed",
-				zap.String("avatar_id", ev.AvatarID), zap.Error(err))
+			p.log.WarnContext(ctx, "original does not decode, marking failed",
+				"avatar_id", ev.AvatarID, "error", err)
 			return p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusFailed)
 		}
 
@@ -100,14 +140,25 @@ func (p *Processor) HandleUpload(ctx context.Context, ev avatar.UploadEvent) err
 	if err := p.repo.SetThumbnails(ctx, ev.AvatarID, keys); err != nil {
 		return err
 	}
-	p.log.Info("thumbnails ready", zap.String("avatar_id", ev.AvatarID))
+	p.log.InfoContext(ctx, "thumbnails ready", "avatar_id", ev.AvatarID)
+	status = statusOK
 	return nil
 }
 
 // HandleDelete removes the S3 objects of a soft-deleted avatar. The
 // store treats missing keys as success, so repeated deliveries are
 // harmless.
-func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) error {
+func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) (err error) {
+	ctx, span := tracer.Start(ctx, "process_delete", trace.WithAttributes(
+		attribute.String("avatar_id", ev.AvatarID),
+		attribute.Int("keys", len(ev.S3Keys)),
+	))
+	defer func() { telemetry.End(span, err) }()
+
+	status := statusError
+	start := time.Now()
+	defer func() { p.obs.ObserveProcessed("delete", status, time.Since(start).Seconds()) }()
+
 	for _, key := range ev.S3Keys {
 		if err := p.files.Delete(ctx, key); err != nil {
 			return fmt.Errorf("delete object %s: %w", key, err)
@@ -116,11 +167,12 @@ func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) err
 
 	// The record is already soft-deleted and invisible: a missing
 	// row here only means it never existed.
-	err := p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusDeleted)
+	err = p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusDeleted)
 	if err != nil && !errors.Is(err, avatar.ErrNotFound) {
 		return err
 	}
-	p.log.Info("avatar files removed", zap.String("avatar_id", ev.AvatarID))
+	p.log.InfoContext(ctx, "avatar files removed", "avatar_id", ev.AvatarID)
+	status = statusOK
 	return nil
 }
 
@@ -128,7 +180,7 @@ func (p *Processor) HandleDelete(ctx context.Context, ev avatar.DeleteEvent) err
 // stuck "processing" is distinguishable from a broken one.
 func (p *Processor) UploadFailed(ctx context.Context, ev avatar.UploadEvent) {
 	if err := p.repo.SetProcessingStatus(ctx, ev.AvatarID, avatar.ProcessingStatusFailed); err != nil {
-		p.log.Error("mark processing failed",
-			zap.String("avatar_id", ev.AvatarID), zap.Error(err))
+		p.log.ErrorContext(ctx, "mark processing failed",
+			"avatar_id", ev.AvatarID, "error", err)
 	}
 }

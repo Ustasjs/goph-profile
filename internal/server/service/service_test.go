@@ -7,12 +7,12 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 )
@@ -148,7 +148,7 @@ func (p *fakePub) PublishDelete(_ context.Context, ev avatar.DeleteEvent) error 
 }
 
 func newService(repo *fakeRepo, files *fakeFiles) *Service {
-	return New(repo, files, &fakePub{}, zap.NewNop())
+	return New(repo, files, &fakePub{}, slog.New(slog.DiscardHandler))
 }
 
 // pngBytes renders a real PNG so DecodeConfig has something to read.
@@ -162,7 +162,7 @@ func pngBytes(t *testing.T, w, h int) []byte {
 func TestUpload(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
 	pub := &fakePub{}
-	svc := New(repo, files, pub, zap.NewNop())
+	svc := New(repo, files, pub, slog.New(slog.DiscardHandler))
 
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 640, 480))
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestUpload(t *testing.T) {
 func TestUploadPublishFailureStillSucceeds(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
 	pub := &fakePub{err: errors.New("broker is down")}
-	svc := New(repo, files, pub, zap.NewNop())
+	svc := New(repo, files, pub, slog.New(slog.DiscardHandler))
 
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
 	require.NoError(t, err)
@@ -276,7 +276,7 @@ func TestThumbnailMissingUntilProcessed(t *testing.T) {
 func TestDeleteOwnership(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
 	pub := &fakePub{}
-	svc := New(repo, files, pub, zap.NewNop())
+	svc := New(repo, files, pub, slog.New(slog.DiscardHandler))
 
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestDeleteOwnership(t *testing.T) {
 func TestDeleteCollectsThumbnailKeys(t *testing.T) {
 	repo, files := newFakeRepo(), newFakeFiles()
 	pub := &fakePub{}
-	svc := New(repo, files, pub, zap.NewNop())
+	svc := New(repo, files, pub, slog.New(slog.DiscardHandler))
 
 	a, err := svc.Upload(context.Background(), "u1", "pic.png", pngBytes(t, 1, 1))
 	require.NoError(t, err)

@@ -54,6 +54,7 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+      - "15692:15692" # prometheus plugin
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -61,6 +62,76 @@ services:
       retries: 5
     volumes:
       - rabbitdata:/var/lib/rabbitmq
+      # Adds rabbitmq_prometheus on top of the image's default
+      # management plugin.
+      - ./deploy/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+
+  # Jaeger all-in-one with the built-in OTLP receiver. Traces live in
+  # memory: a restart clears them, which is fine for a local stand.
+  jaeger:
+    image: jaegertracing/jaeger:2.4.0
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:16686/"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  loki:
+    image: grafana/loki:3.4.2
+    ports:
+      - "3100:3100"
+    volumes:
+      - lokidata:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Ships this project's container logs to Loki via the docker API.
+  promtail:
+    image: grafana/promtail:3.4.2
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./deploy/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  # Anonymous admin: a local training stand needs no login wall.
+  grafana:
+    image: grafana/grafana:11.6.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   # The app profile runs the built server and worker. A plain
   # "docker compose up -d" starts only the infrastructure for local
@@ -82,6 +153,8 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       LOG_LEVEL: info
       RUN_ADDRESS: ":8080"
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+      METRICS_ADDRESS: ":9091"
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,3 +186,5 @@ volumes:
   pgdata:
   miniodata:
   rabbitdata:
+  lokidata:
+  grafanadata:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -12,7 +13,6 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/ustasjs/goph-profile/internal/avatar"
 )
@@ -30,7 +30,7 @@ func TestEventJSON(t *testing.T) {
 }
 
 func TestWithRetry(t *testing.T) {
-	c := &Consumer{backoff: []time.Duration{0, 0, 0}, log: zap.NewNop()}
+	c := &Consumer{backoff: []time.Duration{0, 0, 0}, log: slog.New(slog.DiscardHandler)}
 
 	t.Run("succeeds after failures", func(t *testing.T) {
 		attempts := 0
@@ -84,7 +84,7 @@ func newBrokerPair(t *testing.T) (*Publisher, *Consumer) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pub.Close() })
 
-	cons, err := NewConsumer(url, 1, zap.NewNop())
+	cons, err := NewConsumer(url, 1, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	cons.SetBackoff([]time.Duration{10 * time.Millisecond})
 	t.Cleanup(func() { _ = cons.Close() })

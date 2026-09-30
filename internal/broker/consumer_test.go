@@ -3,13 +3,13 @@ package broker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 // fakeAck records acknowledgements without a broker: amqp.Delivery
@@ -29,7 +29,7 @@ func (a *fakeAck) Nack(_ uint64, _, requeue bool) error {
 func (a *fakeAck) Reject(uint64, bool) error { return nil }
 
 func newUnitConsumer() *Consumer {
-	return &Consumer{backoff: []time.Duration{0}, log: zap.NewNop()}
+	return &Consumer{backoff: []time.Duration{0}, log: slog.New(slog.DiscardHandler)}
 }
 
 func delivery(ack *fakeAck) amqp.Delivery {
@@ -38,10 +38,10 @@ func delivery(ack *fakeAck) amqp.Delivery {
 
 func TestNewConsumerRejectsBadArguments(t *testing.T) {
 	// Both checks fire before any dial, so no broker is needed.
-	_, err := NewConsumer("", 1, zap.NewNop())
+	_, err := NewConsumer("", 1, slog.New(slog.DiscardHandler))
 	assert.Error(t, err)
 
-	_, err = NewConsumer("amqp://guest:guest@localhost:5672/", 0, zap.NewNop())
+	_, err = NewConsumer("amqp://guest:guest@localhost:5672/", 0, slog.New(slog.DiscardHandler))
 	assert.Error(t, err)
 }
 
