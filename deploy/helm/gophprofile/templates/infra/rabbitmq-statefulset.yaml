@@ -22,6 +22,7 @@ spec:
       containers:
         - name: rabbitmq
           image: {{ .Values.rabbitmq.image }}
+          imagePullPolicy: IfNotPresent
           env:
             # An explicit account instead of guest/guest: guest is
             # restricted to loopback connections by RabbitMQ itself.

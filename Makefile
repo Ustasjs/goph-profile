@@ -51,11 +51,15 @@ build:
 clean:
 	rm -rf bin
 
-# Build the image straight into the cluster's containerd (k8s.io
-# namespace), so Rancher Desktop's k3s sees it without a registry.
-# With the dockerd engine use: docker build -t gophprofile:local .
+# Build the image where Rancher Desktop's k3s can see it without a
+# registry. With the moby engine (default here) k3s runs through
+# cri-dockerd and shares dockerd's image store, so a plain docker
+# build is enough. With the containerd engine build into the k8s.io
+# namespace instead: nerdctl --namespace k8s.io build -t gophprofile:local .
+# The context is pinned: with Docker Desktop also installed, the
+# default context would build into the wrong daemon.
 image:
-	nerdctl --namespace k8s.io build \
+	docker --context rancher-desktop build \
 		--build-arg VERSION=$(VERSION) --build-arg BUILD_DATE=$(BUILD_DATE) \
 		-t gophprofile:local .
 
