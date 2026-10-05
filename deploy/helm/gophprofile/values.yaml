@@ -1,0 +1,179 @@
+# Default values: a self-contained deployment with the bundled
+# infrastructure, sized for a local cluster. values-local.yaml tunes
+# it for Rancher Desktop, values-prod.yaml shows the external-services
+# shape of the same chart.
+
+nameOverride: ""
+
+image:
+  repository: gophprofile
+  # The local tag is built straight into the cluster's containerd:
+  #   nerdctl --namespace k8s.io build -t gophprofile:local .
+  tag: local
+  # IfNotPresent, not Always: a local-only tag must never trigger a
+  # registry pull, and prod values can still point at a registry.
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  # The app makes no Kubernetes API calls, so least privilege means
+  # no token in the pod and no Role/RoleBinding at all.
+  automountServiceAccountToken: false
+
+# Non-secret app settings, rendered into the ConfigMap. The S3
+# endpoint is derived from the bundled MinIO unless minio.enabled is
+# false, in which case config.s3Endpoint must be set.
+config:
+  logLevel: info
+  s3Bucket: avatars
+  s3UseSSL: "false"
+  s3Endpoint: ""
+  workerPrefetch: "8"
+  # Empty endpoint disables tracing: the Kubernetes stand runs no
+  # Jaeger (compose remains the full observability environment).
+  otlpEndpoint: ""
+  metricsAddress: ":9091"
+
+# Secret material. With the bundled infrastructure enabled these are
+# assembled from postgresql.auth / rabbitmq.auth / minio.auth instead,
+# so the password lives in exactly one place. Plaintext values are a
+# deliberate study-project simplification; production would source
+# them via external-secrets or SOPS.
+secrets:
+  databaseDSN: ""
+  rabbitmqURL: ""
+  s3AccessKey: ""
+  s3SecretKey: ""
+
+# Shared pod/container security for the app pods (server, worker,
+# migrate Job). The binaries write nothing to disk, so the root
+# filesystem stays read-only; the UID matches the Dockerfile.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+server:
+  # Used only while autoscaling is disabled; with the HPA active the
+  # field is omitted so helm upgrade does not fight the autoscaler.
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    # CPU only: thumbnail generation is CPU-bound, so CPU tracks the
+    # queue pressure well enough here. The production-grade answer is
+    # queue-length scaling (KEDA), out of scope for this stand.
+    targetCPUUtilizationPercentage: 75
+
+ingress:
+  enabled: true
+  className: traefik
+  host: gophprofile.localhost
+  # Extra controller-specific annotations pass through as-is (for
+  # ingress-nginx this is where proxy-body-size goes, see
+  # values-prod.yaml). With className traefik the chart also renders a
+  # buffering Middleware enforcing maxBodyBytes.
+  annotations: {}
+  maxBodyBytes: 10485760
+
+migrations:
+  # Run migrations as a Helm hook Job (post-install, pre-upgrade).
+  # The server's own startup auto-migration is switched off whenever
+  # the hook owns the schema.
+  enabled: true
+
+networkPolicy:
+  enabled: false
+
+serviceMonitor:
+  enabled: false
+  # kube-prometheus-stack discovers only ServiceMonitors labeled with
+  # its release name (serviceMonitorSelectorNilUsesHelmValues).
+  labels:
+    release: monitoring
+
+# --- Bundled infrastructure -------------------------------------
+# Each component can be disabled to use an external service instead;
+# the matching secrets./config. values then become required. The
+# bucket needs no bootstrap job: the server ensures it at startup.
+
+postgresql:
+  enabled: true
+  image: postgres:17-alpine
+  auth:
+    username: gophprofile
+    password: gophprofile
+    database: gophprofile
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+minio:
+  enabled: true
+  # quay.io, not Docker Hub: the Hub mirror rejects anonymous pulls.
+  image: quay.io/minio/minio:latest
+  auth:
+    rootUser: minioadmin
+    rootPassword: minioadmin
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+rabbitmq:
+  enabled: true
+  image: rabbitmq:4-management-alpine
+  auth:
+    username: gophprofile
+    password: gophprofile
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi

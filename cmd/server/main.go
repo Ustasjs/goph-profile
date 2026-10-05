@@ -80,8 +80,16 @@ func run(cfg config.Config, log *slog.Logger) error {
 	if cfg.DatabaseDSN == "" {
 		return errors.New("database DSN is required: set DATABASE_DSN or -d")
 	}
-	if err := migrations.Run(cfg.DatabaseDSN); err != nil {
-		return err
+	if cfg.MigrateOnly {
+		// Hook-job mode (Helm): apply the schema and exit so the Job
+		// completes instead of starting a second server.
+		log.Info("running migrations only")
+		return migrations.Run(cfg.DatabaseDSN)
+	}
+	if cfg.AutoMigrate {
+		if err := migrations.Run(cfg.DatabaseDSN); err != nil {
+			return err
+		}
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseDSN)

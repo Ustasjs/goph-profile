@@ -49,6 +49,13 @@ type Config struct {
 	// MetricsAddress is the worker's /metrics listen address. The
 	// server serves /metrics on RunAddress instead.
 	MetricsAddress string
+	// AutoMigrate applies pending migrations at server start. On by
+	// default for local runs and compose; Kubernetes turns it off and
+	// runs migrations in a dedicated hook Job instead.
+	AutoMigrate bool
+	// MigrateOnly applies pending migrations and exits without
+	// starting the server. Used by the Helm migration hook.
+	MigrateOnly bool
 }
 
 // Load reads the settings for the running program. It must be
@@ -67,6 +74,7 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 		LogLevel:       defaultLogLevel,
 		OTLPEndpoint:   defaultOTLPEndpoint,
 		MetricsAddress: defaultMetricsAddr,
+		AutoMigrate:    true,
 	}
 
 	stringVars := map[string]*string{
@@ -86,12 +94,19 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 			*dst = v
 		}
 	}
-	if v, ok := lookupEnv("S3_USE_SSL"); ok {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse S3_USE_SSL: %w", err)
+	boolVars := map[string]*bool{
+		"S3_USE_SSL":            &cfg.S3UseSSL,
+		"DATABASE_AUTO_MIGRATE": &cfg.AutoMigrate,
+		"MIGRATE_ONLY":          &cfg.MigrateOnly,
+	}
+	for name, dst := range boolVars {
+		if v, ok := lookupEnv(name); ok {
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse %s: %w", name, err)
+			}
+			*dst = b
 		}
-		cfg.S3UseSSL = b
 	}
 	if v, ok := lookupEnv("WORKER_PREFETCH"); ok {
 		n, err := strconv.Atoi(v)
@@ -113,6 +128,8 @@ func loadFrom(fs *flag.FlagSet, args []string, lookupEnv func(string) (string, b
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
 	fs.StringVar(&cfg.OTLPEndpoint, "otlp-endpoint", cfg.OTLPEndpoint, "OTLP gRPC endpoint for traces, empty disables tracing")
 	fs.StringVar(&cfg.MetricsAddress, "metrics-address", cfg.MetricsAddress, "worker /metrics listen address")
+	fs.BoolVar(&cfg.AutoMigrate, "auto-migrate", cfg.AutoMigrate, "apply migrations at server start")
+	fs.BoolVar(&cfg.MigrateOnly, "migrate-only", cfg.MigrateOnly, "apply migrations and exit")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
 	}

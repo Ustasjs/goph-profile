@@ -38,6 +38,8 @@ func TestDefaults(t *testing.T) {
 	assert.False(t, cfg.S3UseSSL)
 	assert.Equal(t, 8, cfg.Prefetch)
 	assert.Equal(t, "localhost:4317", cfg.OTLPEndpoint)
+	assert.True(t, cfg.AutoMigrate)
+	assert.False(t, cfg.MigrateOnly)
 }
 
 func TestEnvOverridesDefaults(t *testing.T) {
@@ -81,9 +83,33 @@ func TestEmptyEnvironmentLoads(t *testing.T) {
 	assert.Empty(t, cfg.DatabaseDSN)
 }
 
+func TestMigrationModes(t *testing.T) {
+	env := required()
+	env["DATABASE_AUTO_MIGRATE"] = "false"
+	env["MIGRATE_ONLY"] = "true"
+
+	cfg, err := load(t, nil, env)
+	require.NoError(t, err)
+	assert.False(t, cfg.AutoMigrate)
+	assert.True(t, cfg.MigrateOnly)
+
+	// Flags win over env, as everywhere else.
+	cfg, err = load(t, []string{"-auto-migrate", "-migrate-only=false"}, env)
+	require.NoError(t, err)
+	assert.True(t, cfg.AutoMigrate)
+	assert.False(t, cfg.MigrateOnly)
+}
+
 func TestBadSSLValue(t *testing.T) {
 	env := required()
 	env["S3_USE_SSL"] = "nope"
+	_, err := load(t, nil, env)
+	assert.Error(t, err)
+}
+
+func TestBadAutoMigrateValue(t *testing.T) {
+	env := required()
+	env["DATABASE_AUTO_MIGRATE"] = "nope"
 	_, err := load(t, nil, env)
 	assert.Error(t, err)
 }

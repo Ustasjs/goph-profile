@@ -1,0 +1,12 @@
+# Keep the build context to the sources: no local state, secrets or
+# deploy configs (the image embeds the UI and migrations itself).
+.git
+.github
+.idea
+.env
+bin/
+coverage.out
+deploy/
+docker-compose.yml
+Makefile
+README.md

@@ -1,0 +1,28 @@
+# Rancher Desktop overrides. The defaults are already local-friendly;
+# this file only trims resources for a laptop cluster and pins the
+# locally built tag explicitly.
+
+image:
+  tag: local
+  pullPolicy: IfNotPresent
+
+ingress:
+  host: gophprofile.localhost
+
+server:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+worker:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

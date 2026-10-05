@@ -92,6 +92,7 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 	})
 
 	r.Get("/health", healthHandler(checks))
+	r.Get("/live", liveHandler)
 	r.Method(http.MethodGet, "/metrics", m.Handler())
 
 	r.Get("/", servePage(pageUpload))
@@ -114,7 +115,14 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 // and metrics agreeing on what to ignore: those endpoints fire every
 // few seconds and would drown the real traffic everywhere.
 func isTechnical(path string) bool {
-	return path == "/health" || path == "/metrics"
+	return path == "/health" || path == "/live" || path == "/metrics"
+}
+
+// liveHandler answers the liveness probe. It is deliberately
+// dependency-free: a dead database makes the pod unready via /health,
+// not restarted via /live.
+func liveHandler(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // tracing names the server span after the matched route and exposes

@@ -1,0 +1,31 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "gophprofile.fullname" . }}
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+  annotations:
+    {{- if eq .Values.ingress.className "traefik" }}
+    # Reference to the buffering Middleware below; the format is
+    # <namespace>-<name>@kubernetescrd. This is Traefik's equivalent
+    # of ingress-nginx's proxy-body-size.
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-{{ include "gophprofile.fullname" . }}-buffering@kubernetescrd
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "gophprofile.fullname" . }}-server
+                port:
+                  name: http
+{{- end }}
