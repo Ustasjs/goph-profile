@@ -25,3 +25,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./... -count=1
+
+  # Helm is preinstalled on the ubuntu runners.
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: helm lint deploy/helm/gophprofile

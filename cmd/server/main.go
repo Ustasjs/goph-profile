@@ -38,6 +38,19 @@ var (
 	buildDate    = "N/A"
 )
 
+// General OpenAPI metadata; `make swagger` regenerates docs/ from
+// these and the per-handler annotations in internal/server/httpserver.
+//
+//	@title			GophProfile API
+//	@version		1.0
+//	@description	Avatar service: uploads, thumbnails and user galleries.
+//	@BasePath		/
+//
+//	@securityDefinitions.apikey	UserID
+//	@in							header
+//	@name						X-User-ID
+//	@description				The requester's user id; the MVP trusts it instead of real authentication.
+
 func main() {
 	fmt.Printf("Build version: %s\nBuild date: %s\n", buildVersion, buildDate)
 

@@ -7,7 +7,8 @@ BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.buildVersion=$(VERSION) -X main.buildDate=$(BUILD_DATE)
 
 .PHONY: run run-worker test test-integration cover lint build clean \
-	image helm-install-local helm-uninstall monitoring-install
+	image helm-install-local helm-uninstall monitoring-install \
+	swagger helm-validate
 
 HELM_CHART := deploy/helm/gophprofile
 HELM_NAMESPACE := gophprofile
@@ -44,6 +45,20 @@ cover:
 
 lint:
 	golangci-lint run ./...
+
+# Regenerate the OpenAPI spec (docs/) from the swag annotations.
+swagger:
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+		-g cmd/server/main.go -o docs --parseInternal
+
+# Chart checks: helm lint plus kubeconform over both value sets.
+# -ignore-missing-schemas covers the CRDs (ServiceMonitor, Middleware).
+helm-validate:
+	helm lint $(HELM_CHART)
+	helm template gophprofile $(HELM_CHART) -f $(HELM_CHART)/values-local.yaml \
+		| kubeconform -strict -ignore-missing-schemas -summary
+	helm template gophprofile $(HELM_CHART) -f $(HELM_CHART)/values-prod.yaml \
+		| kubeconform -strict -ignore-missing-schemas -summary
 
 # Build the server and worker binaries with version info.
 build:

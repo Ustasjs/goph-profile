@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/trace"
 
+	// Registers the generated OpenAPI spec that /swagger serves.
+	_ "github.com/ustasjs/goph-profile/docs"
 	"github.com/ustasjs/goph-profile/internal/metrics"
 )
 
@@ -94,6 +97,10 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 	r.Get("/health", healthHandler(checks))
 	r.Get("/live", liveHandler)
 	r.Method(http.MethodGet, "/metrics", m.Handler())
+
+	// User-facing documentation, not a technical endpoint: it stays
+	// visible in traces, logs and RED metrics like any other route.
+	r.Get("/swagger/*", httpSwagger.Handler())
 
 	r.Get("/", servePage(pageUpload))
 	r.Get("/web/upload", servePage(pageUpload))

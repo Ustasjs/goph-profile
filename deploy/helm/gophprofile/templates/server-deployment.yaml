@@ -61,3 +61,10 @@ spec:
             {{- toYaml .Values.server.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # Endpoint removal propagates to Traefik while the pod still
+          # serves, so a rolling restart drops no requests; SIGTERM and
+          # the in-process graceful shutdown follow after the pause.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 3

@@ -1,0 +1,60 @@
+# Illustrative production shape of the same chart: managed
+# PostgreSQL/S3/AMQP instead of the bundled infrastructure, a
+# registry image and an nginx ingress class. Not applied anywhere in
+# this project; validated with `make helm-validate`. Real secret
+# values would come from an external source (external-secrets, SOPS),
+# never from a committed file.
+
+image:
+  repository: registry.example.com/gophprofile/gophprofile
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+config:
+  s3Endpoint: s3.example.com:443
+  s3UseSSL: "true"
+  s3Bucket: avatars-prod
+  otlpEndpoint: otel-collector.observability:4317
+
+secrets:
+  databaseDSN: postgres://gophprofile:CHANGE-ME@db.example.com:5432/gophprofile
+  rabbitmqURL: amqp://gophprofile:CHANGE-ME@mq.example.com:5672/
+  s3AccessKey: CHANGE-ME
+  s3SecretKey: CHANGE-ME
+
+# External managed services; the bundled infra stays off.
+postgresql:
+  enabled: false
+minio:
+  enabled: false
+rabbitmq:
+  enabled: false
+
+server:
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+
+worker:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+
+ingress:
+  enabled: true
+  className: nginx
+  host: avatars.example.com
+  # The nginx equivalent of the Traefik buffering Middleware the
+  # chart renders for className traefik.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+
+networkPolicy:
+  enabled: true
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: monitoring

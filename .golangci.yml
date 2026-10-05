@@ -1,5 +1,10 @@
 version: "2"
 
+issues:
+  # Generated OpenAPI package (make swagger); not hand-written code.
+  exclude-dirs:
+    - docs
+
 linters:
   # Standard set: errcheck, govet, ineffassign, staticcheck, unused.
   default: standard
