@@ -7,10 +7,12 @@ BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.buildVersion=$(VERSION) -X main.buildDate=$(BUILD_DATE)
 
 .PHONY: run run-worker test test-integration cover lint build clean \
-	image helm-install-local helm-uninstall
+	image helm-install-local helm-uninstall monitoring-install
 
 HELM_CHART := deploy/helm/gophprofile
 HELM_NAMESPACE := gophprofile
+# kube-prometheus-stack pin; bump deliberately, not with the repo.
+KPS_VERSION := 91.9.0
 
 # Connection strings matching docker-compose defaults. Used by the
 # integration targets; plain "make test" skips integration suites
@@ -71,3 +73,15 @@ helm-install-local:
 
 helm-uninstall:
 	helm uninstall gophprofile --namespace $(HELM_NAMESPACE)
+
+# Prometheus Operator + Prometheus + Grafana, then the sprint-2
+# dashboards as a sidecar-watched ConfigMap.
+monitoring-install:
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+	helm repo update prometheus-community
+	helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+		--namespace monitoring --create-namespace --version $(KPS_VERSION) \
+		-f deploy/k8s/monitoring-values.yaml --wait --timeout 10m
+	kubectl -n monitoring create configmap gophprofile-dashboards \
+		--from-file=deploy/grafana/dashboards/ --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n monitoring label configmap gophprofile-dashboards grafana_dashboard="1" --overwrite

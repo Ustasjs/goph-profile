@@ -1,0 +1,28 @@
+{{- if and .Values.serviceMonitor.enabled .Values.rabbitmq.enabled }}
+# Queue metrics for the dashboards: the aggregated endpoint plus the
+# per-queue depth (queue_coarse_metrics covers the DLQ panel), same
+# as the compose Prometheus configuration.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-rabbitmq
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rabbitmq
+  endpoints:
+    - port: prometheus
+      path: /metrics
+      interval: 15s
+    - port: prometheus
+      path: /metrics/detailed
+      params:
+        family: [queue_coarse_metrics]
+      interval: 15s
+{{- end }}

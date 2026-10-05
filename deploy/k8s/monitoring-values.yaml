@@ -1,0 +1,19 @@
+# Minimal kube-prometheus-stack values for the local stand.
+# Installed by `make monitoring-install`, chart version pinned there.
+# The operator discovers only ServiceMonitors labeled with this
+# release's name (release: monitoring) — the app chart sets that
+# label via serviceMonitor.labels.
+
+alertmanager:
+  # No alerting on this stand (deliberately out of the sprint scope).
+  enabled: false
+
+grafana:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - grafana.localhost
+  # The sidecar already watches for ConfigMaps labeled
+  # grafana_dashboard: "1" in its own namespace; make
+  # monitoring-install loads the project dashboards that way.
