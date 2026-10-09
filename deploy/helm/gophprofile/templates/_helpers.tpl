@@ -49,13 +49,28 @@ In-cluster service names of the bundled infrastructure.
 {{- end }}
 
 {{/*
+Passwords of the bundled infrastructure. The committed values files
+carry no real ones, so rendering fails fast when a password is left
+unset instead of deploying empty credentials.
+*/}}
+{{- define "gophprofile.postgresPassword" -}}
+{{- required "postgresql.auth.password is required when postgresql.enabled (set it in an uncommitted values file, see values-local.example.yaml)" .Values.postgresql.auth.password -}}
+{{- end }}
+{{- define "gophprofile.minioRootPassword" -}}
+{{- required "minio.auth.rootPassword is required when minio.enabled (set it in an uncommitted values file, see values-local.example.yaml)" .Values.minio.auth.rootPassword -}}
+{{- end }}
+{{- define "gophprofile.rabbitmqPassword" -}}
+{{- required "rabbitmq.auth.password is required when rabbitmq.enabled (set it in an uncommitted values file, see values-local.example.yaml)" .Values.rabbitmq.auth.password -}}
+{{- end }}
+
+{{/*
 Database DSN: assembled from postgresql.auth when the bundled
 PostgreSQL is enabled (single source of truth for the password),
 otherwise taken verbatim from secrets.databaseDSN.
 */}}
 {{- define "gophprofile.databaseDSN" -}}
 {{- if .Values.postgresql.enabled -}}
-postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "gophprofile.postgresHost" . }}:5432/{{ .Values.postgresql.auth.database }}?sslmode=disable
+postgres://{{ .Values.postgresql.auth.username }}:{{ include "gophprofile.postgresPassword" . }}@{{ include "gophprofile.postgresHost" . }}:5432/{{ .Values.postgresql.auth.database }}?sslmode=disable
 {{- else -}}
 {{- required "secrets.databaseDSN is required when postgresql.enabled is false" .Values.secrets.databaseDSN -}}
 {{- end -}}
@@ -66,7 +81,7 @@ AMQP URL: same single-source rule as the database DSN.
 */}}
 {{- define "gophprofile.rabbitmqURL" -}}
 {{- if .Values.rabbitmq.enabled -}}
-amqp://{{ .Values.rabbitmq.auth.username }}:{{ .Values.rabbitmq.auth.password }}@{{ include "gophprofile.rabbitmqHost" . }}:5672/
+amqp://{{ .Values.rabbitmq.auth.username }}:{{ include "gophprofile.rabbitmqPassword" . }}@{{ include "gophprofile.rabbitmqHost" . }}:5672/
 {{- else -}}
 {{- required "secrets.rabbitmqURL is required when rabbitmq.enabled is false" .Values.secrets.rabbitmqURL -}}
 {{- end -}}
@@ -85,7 +100,7 @@ S3 account, so enabling minio overrides secrets.s3AccessKey/SecretKey.
 {{- end }}
 {{- define "gophprofile.s3SecretKey" -}}
 {{- if .Values.minio.enabled -}}
-{{- .Values.minio.auth.rootPassword -}}
+{{- include "gophprofile.minioRootPassword" . -}}
 {{- else -}}
 {{- required "secrets.s3SecretKey is required when minio.enabled is false" .Values.secrets.s3SecretKey -}}
 {{- end -}}

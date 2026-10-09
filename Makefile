@@ -51,11 +51,13 @@ swagger:
 	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
 		-g cmd/server/main.go -o docs --parseInternal
 
-# Chart checks: helm lint plus kubeconform over both value sets.
+# Chart checks: helm lint plus kubeconform over both value sets. The
+# local set renders from the committed example (its change-me
+# placeholders are enough — validation needs shapes, not secrets).
 # -ignore-missing-schemas covers the CRDs (ServiceMonitor, Middleware).
 helm-validate:
 	helm lint $(HELM_CHART)
-	helm template gophprofile $(HELM_CHART) -f $(HELM_CHART)/values-local.yaml \
+	helm template gophprofile $(HELM_CHART) -f $(HELM_CHART)/values-local.example.yaml \
 		| kubeconform -strict -ignore-missing-schemas -summary
 	helm template gophprofile $(HELM_CHART) -f $(HELM_CHART)/values-prod.yaml \
 		| kubeconform -strict -ignore-missing-schemas -summary
@@ -81,6 +83,10 @@ image:
 		-t gophprofile:local .
 
 helm-install-local:
+	@test -f $(HELM_CHART)/values-local.yaml || { \
+		echo "no $(HELM_CHART)/values-local.yaml:"; \
+		echo "  cp $(HELM_CHART)/values-local.example.yaml $(HELM_CHART)/values-local.yaml"; \
+		echo "and set the passwords in it (the file is gitignored)."; exit 1; }
 	helm upgrade --install gophprofile $(HELM_CHART) \
 		--namespace $(HELM_NAMESPACE) --create-namespace \
 		-f $(HELM_CHART)/values-local.yaml \

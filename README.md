@@ -152,7 +152,11 @@ make image
 #    даёт CRD ServiceMonitor — ставится до приложения) + дашборды
 make monitoring-install
 
-# 3. Приложение со всей инфраструктурой
+# 3. Локальные values с паролями (файл в .gitignore, в репо — только
+#    example с плейсхолдерами; на свежем стенде пароли любые)
+cp deploy/helm/gophprofile/values-local.example.yaml deploy/helm/gophprofile/values-local.yaml
+
+# 4. Приложение со всей инфраструктурой
 make helm-install-local
 ```
 
@@ -168,7 +172,7 @@ make helm-install-local
 - **Ingress** — Traefik (дефолт k3s), лимит тела запроса 10MB задаёт CRD Middleware `buffering.maxRequestBodyBytes` — эквивалент nginx-аннотации `proxy-body-size` из ТЗ; для ingress-nginx она передаётся через `ingress.annotations` (см. `values-prod.yaml`).
 - **Rate limiting** — второй Traefik Middleware `rateLimit` (токен-бакет: `ingress.rateLimit.average` запросов/с на источник, всплеск до `burst`, сверх — 429); для ingress-nginx — аннотации `limit-rps`/`limit-burst-multiplier` в `values-prod.yaml`.
 - **Мониторинг** — три ServiceMonitor'а: server (`:8080/metrics`), worker (`:9091/metrics`), rabbitmq (`:15692`, обычный и `/metrics/detailed?family=queue_coarse_metrics` для глубины очередей и DLQ). Классическая грабля: оператор kube-prometheus-stack видит только ServiceMonitor'ы с лейблом `release: <имя-релиза-стека>` (`serviceMonitorSelectorNilUsesHelmValues: true`), поэтому чарт вешает `release: monitoring` через `serviceMonitor.labels`. Дашборды спринта 2 загружаются `make monitoring-install` как ConfigMap с лейблом `grafana_dashboard: "1"` — их подхватывает sidecar Grafana. Jaeger/Loki в кластер не разворачиваются (вне ТЗ спринта): в K8s-values `OTEL_EXPORTER_OTLP_ENDPOINT` пуст и трейсинг штатно выключен; полный observability-стенд остаётся в docker-compose.
-- **Секреты** — `DATABASE_DSN` и `RABBITMQ_URL` собираются хелперами из `postgresql.auth`/`rabbitmq.auth`, когда встроенная инфраструктура включена (пароль живёт в одном месте values), S3-ключи берутся из `minio.auth`. Плейнтекст в values — осознанное упрощение учебного стенда; в проде источником были бы external-secrets/SOPS.
+- **Секреты** — `DATABASE_DSN` и `RABBITMQ_URL` собираются хелперами из `postgresql.auth`/`rabbitmq.auth`, когда встроенная инфраструктура включена (пароль живёт в одном месте values), S3-ключи берутся из `minio.auth`. В коммитимых файлах паролей нет: `values.yaml` держит пустые строки, реальные значения живут в некоммитимом `values-local.yaml` (в репо — `values-local.example.yaml` с плейсхолдерами, путь добавлен в `.gitignore`), а рендер без заданного пароля падает с понятной ошибкой (`required` в хелперах) — пустые креды задеплоить нельзя. В проде источником были бы external-secrets/SOPS.
 - **Graceful shutdown** — приложение и так гасится по SIGTERM (10s на дослуживание запросов, затем закрытие брокера/пула/флаш трейсов); в K8s добавлен `preStop: sleep 3`, чтобы удаление пода успело доехать до Traefik до SIGTERM — rolling restart не роняет запросы. Известное ограничение worker'а: при выключении соединение с брокером закрывается без дожидания in-flight сообщений — они просто передоставляются (обработка идемпотентна).
 
 ### Образ MinIO

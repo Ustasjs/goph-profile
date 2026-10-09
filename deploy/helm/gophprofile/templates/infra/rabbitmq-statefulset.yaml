@@ -29,7 +29,7 @@ spec:
             - name: RABBITMQ_DEFAULT_USER
               value: {{ .Values.rabbitmq.auth.username | quote }}
             - name: RABBITMQ_DEFAULT_PASS
-              value: {{ .Values.rabbitmq.auth.password | quote }}
+              value: {{ include "gophprofile.rabbitmqPassword" . | quote }}
           ports:
             - name: amqp
               containerPort: 5672

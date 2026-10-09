@@ -36,9 +36,11 @@ config:
 
 # Secret material. With the bundled infrastructure enabled these are
 # assembled from postgresql.auth / rabbitmq.auth / minio.auth instead,
-# so the password lives in exactly one place. Plaintext values are a
-# deliberate study-project simplification; production would source
-# them via external-secrets or SOPS.
+# so the password lives in exactly one place. No committed file holds
+# real values: set them in an uncommitted override
+# (cp values-local.example.yaml values-local.yaml); rendering fails
+# fast when a required one is missing. Production would source them
+# via external-secrets or SOPS.
 secrets:
   databaseDSN: ""
   rabbitmqURL: ""
@@ -144,7 +146,8 @@ postgresql:
   image: postgres:17-alpine
   auth:
     username: gophprofile
-    password: gophprofile
+    # Required when enabled; comes from the uncommitted values file.
+    password: ""
     database: gophprofile
   persistence:
     size: 1Gi
@@ -162,7 +165,8 @@ minio:
   image: quay.io/minio/minio:latest
   auth:
     rootUser: minioadmin
-    rootPassword: minioadmin
+    # Required when enabled; comes from the uncommitted values file.
+    rootPassword: ""
   persistence:
     size: 1Gi
   resources:
@@ -178,7 +182,8 @@ rabbitmq:
   image: rabbitmq:4-management-alpine
   auth:
     username: gophprofile
-    password: gophprofile
+    # Required when enabled; comes from the uncommitted values file.
+    password: ""
   persistence:
     size: 1Gi
   resources:
