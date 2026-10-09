@@ -11,4 +11,20 @@ metadata:
 spec:
   buffering:
     maxRequestBodyBytes: {{ .Values.ingress.maxBodyBytes }}
+---
+# Rate limiting at the edge: a token bucket per source, 429 above it.
+# The nginx counterpart is the limit-rps annotation (values-prod.yaml).
+# On the local stand klipper-lb SNATs external traffic, so Traefik
+# sees one source and the limit acts as a global cap — fine for a
+# study stand, see the README note.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-ratelimit
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  rateLimit:
+    average: {{ .Values.ingress.rateLimit.average }}
+    burst: {{ .Values.ingress.rateLimit.burst }}
 {{- end }}

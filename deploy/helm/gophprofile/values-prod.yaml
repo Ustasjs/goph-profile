@@ -46,10 +46,13 @@ ingress:
   enabled: true
   className: nginx
   host: avatars.example.com
-  # The nginx equivalent of the Traefik buffering Middleware the
-  # chart renders for className traefik.
+  # The nginx equivalents of the Traefik Middlewares the chart
+  # renders for className traefik (body size limit + rate limiting;
+  # nginx allows bursts of limit-rps * limit-burst-multiplier).
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
 
 networkPolicy:
   enabled: true

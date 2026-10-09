@@ -7,10 +7,11 @@ metadata:
     {{- include "gophprofile.labels" . | nindent 4 }}
   annotations:
     {{- if eq .Values.ingress.className "traefik" }}
-    # Reference to the buffering Middleware below; the format is
-    # <namespace>-<name>@kubernetescrd. This is Traefik's equivalent
-    # of ingress-nginx's proxy-body-size.
-    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-{{ include "gophprofile.fullname" . }}-buffering@kubernetescrd
+    # References to the Middlewares from ingress-middleware.yaml; the
+    # format is <namespace>-<name>@kubernetescrd. Together they are
+    # Traefik's equivalent of ingress-nginx's proxy-body-size and
+    # limit-rps annotations.
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-{{ include "gophprofile.fullname" . }}-buffering@kubernetescrd,{{ .Release.Namespace }}-{{ include "gophprofile.fullname" . }}-ratelimit@kubernetescrd
     {{- end }}
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
