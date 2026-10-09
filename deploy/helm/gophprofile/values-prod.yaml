@@ -54,9 +54,6 @@ ingress:
     nginx.ingress.kubernetes.io/limit-rps: "50"
     nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
 
-networkPolicy:
-  enabled: true
-
 serviceMonitor:
   enabled: true
   labels:

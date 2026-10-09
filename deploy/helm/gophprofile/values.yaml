@@ -118,8 +118,14 @@ migrations:
   # the hook owns the schema.
   enabled: true
 
+# On by default: secure out of the box. Enforcement needs a CNI that
+# supports NetworkPolicy (k3s's kube-router, Calico, Cilium); on a CNI
+# without it the objects are silently inert, nothing breaks. The
+# policies assume the ingress controller lives in kube-system and
+# Prometheus in monitoring — in a different topology adjust the
+# templates or consciously disable this.
 networkPolicy:
-  enabled: false
+  enabled: true
 
 serviceMonitor:
   enabled: false

@@ -9,11 +9,8 @@ image:
 ingress:
   host: gophprofile.localhost
 
-# Both assume the local stand: kube-router enforces the policies in
-# k3s, and `make monitoring-install` provides the ServiceMonitor CRD —
-# run it before enabling serviceMonitor here.
-networkPolicy:
-  enabled: true
+# Assumes the local stand: `make monitoring-install` provides the
+# ServiceMonitor CRD — run it before installing with this file.
 serviceMonitor:
   enabled: true
 
