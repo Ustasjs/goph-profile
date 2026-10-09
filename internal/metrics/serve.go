@@ -30,6 +30,12 @@ func Serve(ctx context.Context, addr string, h http.Handler) error {
 func serve(ctx context.Context, ln net.Listener, h http.Handler) error {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", h)
+	// The worker has no other HTTP surface, so its liveness probe
+	// lives next to the scrape endpoint.
+	mux.HandleFunc("/live", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,

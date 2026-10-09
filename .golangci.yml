@@ -17,6 +17,10 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+  exclusions:
+    # Generated OpenAPI package (make swagger); not hand-written code.
+    paths:
+      - docs
 
 formatters:
   enable:
@@ -25,3 +29,6 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/ustasjs/goph-profile
+  exclusions:
+    paths:
+      - docs

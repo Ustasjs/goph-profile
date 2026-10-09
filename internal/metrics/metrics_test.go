@@ -95,6 +95,27 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 	}
 }
 
+func TestServeLiveEndpoint(t *testing.T) {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, ln, NewWorker().Handler()) }()
+
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodGet, "http://"+ln.Addr().String()+"/live", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func TestHandlerServesGoCollector(t *testing.T) {
 	rec := httptest.NewRecorder()
 	NewWorker().Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))

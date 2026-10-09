@@ -1,0 +1,18 @@
+# Metrics-only Service: the worker serves no traffic, but the
+# ServiceMonitor needs a Service to discover the scrape targets.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-worker-metrics
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
