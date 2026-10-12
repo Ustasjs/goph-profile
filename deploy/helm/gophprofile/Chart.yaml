@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gophprofile
+description: Avatar service (GophProfile) with its backing infrastructure
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,58 @@
+{{- if .Values.migrations.enabled }}
+# Schema migrations as a Helm hook. Not pre-install: hooks run before
+# any chart resource exists, so on the first install there would be no
+# postgres to migrate against. post-install covers the first install
+# (the app may answer 500 for a few seconds until the Job finishes —
+# readiness only pings the database); pre-upgrade is the case hooks
+# actually protect, guaranteeing schema-before-new-code. golang-migrate
+# takes an advisory lock, so concurrent runs are safe.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-migrate
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    "helm.sh/hook": post-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "gophprofile.fullname" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.postgresql.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - until nc -z {{ include "gophprofile.postgresHost" . }} 5432; do sleep 2; done
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/server", "-migrate-only"]
+          envFrom:
+            - secretRef:
+                name: {{ include "gophprofile.fullname" . }}
+          env:
+            # The binary defaults to localhost:4317 when unset; a
+            # one-shot migration has nothing to trace.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: ""
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+{{- end }}

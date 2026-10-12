@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/trace"
 
+	// Registers the generated OpenAPI spec that /swagger serves.
+	_ "github.com/ustasjs/goph-profile/docs"
 	"github.com/ustasjs/goph-profile/internal/metrics"
 )
 
@@ -92,7 +95,12 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 	})
 
 	r.Get("/health", healthHandler(checks))
+	r.Get("/live", liveHandler)
 	r.Method(http.MethodGet, "/metrics", m.Handler())
+
+	// User-facing documentation, not a technical endpoint: it stays
+	// visible in traces, logs and RED metrics like any other route.
+	r.Get("/swagger/*", httpSwagger.Handler())
 
 	r.Get("/", servePage(pageUpload))
 	r.Get("/web/upload", servePage(pageUpload))
@@ -114,7 +122,14 @@ func NewRouter(svc AvatarService, checks []HealthCheck, m *metrics.Server, log *
 // and metrics agreeing on what to ignore: those endpoints fire every
 // few seconds and would drown the real traffic everywhere.
 func isTechnical(path string) bool {
-	return path == "/health" || path == "/metrics"
+	return path == "/health" || path == "/live" || path == "/metrics"
+}
+
+// liveHandler answers the liveness probe. It is deliberately
+// dependency-free: a dead database makes the pod unready via /health,
+// not restarted via /live.
+func liveHandler(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // tracing names the server span after the matched route and exposes

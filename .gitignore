@@ -24,3 +24,6 @@ vendor/
 .env
 .cursor
 .claude
+
+# Local Helm values with real passwords (copy of values-local.example.yaml)
+deploy/helm/gophprofile/values-local.yaml

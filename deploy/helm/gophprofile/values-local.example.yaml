@@ -1,0 +1,48 @@
+# Rancher Desktop overrides — template for the uncommitted local file:
+#   cp values-local.example.yaml values-local.yaml
+# then set the passwords. values-local.yaml is gitignored, so real
+# values never reach the repository. Any passwords work on a fresh
+# stand; on an existing one they must match what the PVCs were
+# initialized with.
+
+image:
+  tag: local
+  pullPolicy: IfNotPresent
+
+ingress:
+  host: gophprofile.localhost
+
+postgresql:
+  auth:
+    password: change-me
+
+minio:
+  auth:
+    rootPassword: change-me
+
+rabbitmq:
+  auth:
+    password: change-me
+
+# Assumes the local stand: `make monitoring-install` provides the
+# ServiceMonitor CRD — run it before installing with this file.
+serviceMonitor:
+  enabled: true
+
+server:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+worker:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

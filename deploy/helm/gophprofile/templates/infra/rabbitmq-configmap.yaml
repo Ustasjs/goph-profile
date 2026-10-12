@@ -1,0 +1,14 @@
+{{- if .Values.rabbitmq.enabled }}
+# Same plugin set as the compose stand: management UI plus the
+# prometheus endpoint on 15692 for the ServiceMonitor.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gophprofile.rabbitmqHost" . }}-plugins
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+data:
+  enabled_plugins: |
+    [rabbitmq_management,rabbitmq_prometheus].
+{{- end }}

@@ -72,6 +72,19 @@ type uploadResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// upload stores a new avatar.
+//
+//	@Summary	Upload an avatar
+//	@Tags		avatars
+//	@Security	UserID
+//	@Accept		multipart/form-data
+//	@Produce	json
+//	@Param		file	formData	file	true	"Image file (jpeg, png, webp), up to 10 MB"
+//	@Success	201		{object}	uploadResponse
+//	@Failure	400		{object}	map[string]string
+//	@Failure	413		{object}	map[string]any
+//	@Failure	500		{object}	map[string]string
+//	@Router		/api/v1/avatars [post]
 func (h *handlers) upload(w http.ResponseWriter, r *http.Request) {
 	// Every exit before the service call is a client mistake, so the
 	// rejected outcome is the default and success flips it at the end.
@@ -143,6 +156,15 @@ func formFile(r *http.Request) (multipart.File, *multipart.FileHeader, error) {
 	return r.FormFile("image")
 }
 
+// getFile streams the original avatar file.
+//
+//	@Summary	Download the original file
+//	@Tags		avatars
+//	@Produce	image/jpeg,image/png,image/webp
+//	@Param		avatarID	path	string	true	"Avatar id"
+//	@Success	200			{file}	file
+//	@Failure	404			{object}	map[string]string
+//	@Router		/api/v1/avatars/{avatarID} [get]
 func (h *handlers) getFile(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.GetFile(r.Context(), chi.URLParam(r, "avatarID"))
 	if err != nil {
@@ -152,6 +174,15 @@ func (h *handlers) getFile(w http.ResponseWriter, r *http.Request) {
 	h.streamFile(r.Context(), w, f)
 }
 
+// latestFile streams the newest avatar of the user.
+//
+//	@Summary	Download the user's latest avatar
+//	@Tags		users
+//	@Produce	image/jpeg,image/png,image/webp
+//	@Param		userID	path	string	true	"User id"
+//	@Success	200		{file}	file
+//	@Failure	404		{object}	map[string]string
+//	@Router		/api/v1/users/{userID}/avatar [get]
 func (h *handlers) latestFile(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.LatestFile(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil {
@@ -161,6 +192,16 @@ func (h *handlers) latestFile(w http.ResponseWriter, r *http.Request) {
 	h.streamFile(r.Context(), w, f)
 }
 
+// getThumbnail streams one generated thumbnail.
+//
+//	@Summary	Download a thumbnail
+//	@Tags		avatars
+//	@Produce	image/jpeg
+//	@Param		avatarID	path	string	true	"Avatar id"
+//	@Param		size		path	string	true	"Size name"	Enums(100x100, 300x300)
+//	@Success	200			{file}	file
+//	@Failure	404			{object}	map[string]string
+//	@Router		/api/v1/avatars/{avatarID}/thumbnails/{size} [get]
 func (h *handlers) getThumbnail(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.ThumbnailFile(r.Context(), chi.URLParam(r, "avatarID"), chi.URLParam(r, "size"))
 	if err != nil {
@@ -231,6 +272,15 @@ func toMetadata(a avatar.Avatar) metadataResponse {
 	}
 }
 
+// metadata returns one avatar record.
+//
+//	@Summary	Avatar metadata
+//	@Tags		avatars
+//	@Produce	json
+//	@Param		avatarID	path		string	true	"Avatar id"
+//	@Success	200			{object}	metadataResponse
+//	@Failure	404			{object}	map[string]string
+//	@Router		/api/v1/avatars/{avatarID}/metadata [get]
 func (h *handlers) metadata(w http.ResponseWriter, r *http.Request) {
 	a, err := h.svc.Metadata(r.Context(), chi.URLParam(r, "avatarID"))
 	if err != nil {
@@ -240,6 +290,15 @@ func (h *handlers) metadata(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toMetadata(a))
 }
 
+// list returns all live avatars of the user, newest first.
+//
+//	@Summary	List the user's avatars
+//	@Tags		users
+//	@Produce	json
+//	@Param		userID	path		string	true	"User id"
+//	@Success	200		{array}		metadataResponse
+//	@Failure	500		{object}	map[string]string
+//	@Router		/api/v1/users/{userID}/avatars [get]
 func (h *handlers) list(w http.ResponseWriter, r *http.Request) {
 	avatars, err := h.svc.List(r.Context(), chi.URLParam(r, "userID"))
 	if err != nil {
@@ -253,6 +312,18 @@ func (h *handlers) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+// deleteAvatar soft-deletes one avatar of the requester.
+//
+//	@Summary	Delete an avatar
+//	@Tags		avatars
+//	@Security	UserID
+//	@Produce	json
+//	@Param		avatarID	path	string	true	"Avatar id"
+//	@Success	204			"deleted"
+//	@Failure	400			{object}	map[string]string
+//	@Failure	403			{object}	map[string]string
+//	@Failure	404			{object}	map[string]string
+//	@Router		/api/v1/avatars/{avatarID} [delete]
 func (h *handlers) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -265,6 +336,18 @@ func (h *handlers) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// deleteLatest soft-deletes the newest avatar of the user.
+//
+//	@Summary	Delete the user's latest avatar
+//	@Tags		users
+//	@Security	UserID
+//	@Produce	json
+//	@Param		userID	path	string	true	"User id (must match X-User-ID)"
+//	@Success	204		"deleted"
+//	@Failure	400		{object}	map[string]string
+//	@Failure	403		{object}	map[string]string
+//	@Failure	404		{object}	map[string]string
+//	@Router		/api/v1/users/{userID}/avatar [delete]
 func (h *handlers) deleteLatest(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

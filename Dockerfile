@@ -23,6 +23,13 @@ RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /out/server /out/worker ./
 
-# The default command runs the API server; compose overrides it with
-# /app/worker for the worker service.
+# The binaries write nothing to disk, so an unprivileged fixed UID is
+# enough; Kubernetes pins the same UID in its securityContext.
+RUN adduser -D -u 10001 app
+USER 10001:10001
+
+EXPOSE 8080 9091
+
+# The default command runs the API server; compose and Kubernetes
+# override it with /app/worker for the worker.
 CMD ["/app/server"]

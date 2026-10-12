@@ -1,0 +1,29 @@
+{{- if .Values.serviceMonitor.enabled }}
+# One monitor for both app targets: the selector matches the server
+# and worker-metrics Services, and each endpoint binds to the port
+# name that exists on exactly one of them. The extra labels must
+# include the kube-prometheus-stack release name, or the operator
+# ignores the monitor (serviceMonitorSelectorNilUsesHelmValues).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "gophprofile.fullname" . }}
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
+  endpoints:
+    # Server: /metrics shares the API port.
+    - port: http
+      path: /metrics
+      interval: 15s
+    # Worker: the dedicated metrics listener.
+    - port: metrics
+      path: /metrics
+      interval: 15s
+{{- end }}

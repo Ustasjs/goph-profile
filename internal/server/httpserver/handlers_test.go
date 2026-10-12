@@ -437,6 +437,24 @@ func TestWebPages(t *testing.T) {
 	}
 }
 
+// TestLiveEndpoint checks the liveness probe: always 200 and, like
+// the other technical endpoints, invisible to metrics and logs.
+func TestLiveEndpoint(t *testing.T) {
+	m := metrics.NewServer()
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	srv := httptest.NewServer(NewRouter(&fakeService{}, nil, m, log))
+	t.Cleanup(srv.Close)
+
+	resp := doGet(t, srv, "/live")
+	assert.Equal(t, http.StatusOK, resp.status)
+	assert.Contains(t, string(resp.body), `"status":"ok"`)
+
+	scrape := doGet(t, srv, "/metrics")
+	assert.NotContains(t, string(scrape.body), `route="/live"`)
+	assert.NotContains(t, logBuf.String(), `"path":"/live"`)
+}
+
 // TestObservabilityMiddleware checks the single writer wrap: one
 // request feeds both the log line and the RED metrics with the chi
 // route pattern, while the timer-driven endpoints get neither.

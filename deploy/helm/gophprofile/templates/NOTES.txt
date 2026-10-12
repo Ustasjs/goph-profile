@@ -1,0 +1,25 @@
+GophProfile deployed.
+
+  Web UI / API:  http://{{ .Values.ingress.host }}/
+  Health:        http://{{ .Values.ingress.host }}/health
+  OpenAPI:       http://{{ .Values.ingress.host }}/swagger/index.html
+
+If the host does not resolve (older curl), send the Host header:
+  curl -H 'Host: {{ .Values.ingress.host }}' http://127.0.0.1/health
+
+Pods and autoscaling:
+  kubectl -n {{ .Release.Namespace }} get pods,hpa
+
+{{- if .Values.migrations.enabled }}
+
+Migrations run as a post-install/pre-upgrade hook Job; on the very
+first install the app may answer 500 for a few seconds until the Job
+finishes. Check it with:
+  kubectl -n {{ .Release.Namespace }} logs job/{{ include "gophprofile.fullname" . }}-migrate
+(the Job is deleted automatically once it succeeds)
+{{- end }}
+{{- if .Values.serviceMonitor.enabled }}
+
+Metrics are scraped by the kube-prometheus-stack release "monitoring"
+(see `make monitoring-install`); Grafana: http://grafana.localhost/
+{{- end }}
